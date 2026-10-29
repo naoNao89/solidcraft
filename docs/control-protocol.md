@@ -319,7 +319,7 @@ labels; `prefs:measure_axis_distances` identifies the checkbox.
 | `ui.home` | `open?`: bool; `sample?`: index | the start page: show or hide it, open a built-in sample (once built); returns `open` and the recent designs |
 | `ui.shortcut` | `command`, `key?`, `replace?` | a command's key, or rebinds it (`""` clears; a key another command uses is refused unless `replace`) |
 | `ui.help` | `item?`: `about`, `shortcuts` (read only), `report` (opens a report draft for review), `crashes` (the Crash Reports window) | the version, commit, build date and diagnostic text |
-| `ui.prefs` | any of the [`ui.prefs` settings](#uiprefs-settings) below; also `open`, `button` and `stand_up` (listed there) | sets preferences (kept between runs), returns them all plus `dialog` (the open page or null), `dark`, `viewport_dark` (whether the 3D view is dark), `stand_up_offer` (the offered bodies, or null), `stand_up_note` (whether that offer is the note), `theme_followed` and `theme_follow_error` |
+| `ui.prefs` | any of the [`ui.prefs` settings](#uiprefs-settings) below; also `open`, `button` and `stand_up` (listed there) | sets preferences (kept between runs). While the Preferences dialog is open a setting lands in the dialog's draft: `Apply` and `OK` apply it, and `Cancel`, Esc and the × discard it; `live_apply` (off by default) restores the older behaviour, where a setting takes effect as it is made. The reply reports the preferences in effect (the committed ones, not the draft), plus `dialog` (the open page or null), `dark`, `viewport_dark` (whether the 3D view is dark), `stand_up_offer` (the offered bodies, or null), `stand_up_note` (whether that offer is the note), `theme_followed` and `theme_follow_error` |
 | `ui.capture` | `action?`: `capture`, `revert`, `cancel` | answers the Capture Position question (asked when a command starts or the design is saved while components were moved without capturing); without `action`, what waits |
 | `ui.window` | `action`: minimize, maximize, restore, toggle, close | what the title bar's caption buttons do (on Windows and Linux the application bar is the title bar); close asks about unsaved designs first |
 | `ui.agent_cursor` | `show` (bool), `speed`: a number from 1 to 5 (times the normal speed) or `"instant"` (no animation: the command runs at once and the pointer jumps to where it acted), `follow_camera` (bool); all optional | the settings. While the cursor is shown, `engine.execute` first glides to the command's toolbar button and to each pick, then runs and replies; later requests wait their turn. The pointer shows the command's localized name, including commands inside a closed toolbar group; an animated batch names each command it visits. It also follows the pointer input sent with `ui.move`, `ui.click`, `ui.drag` and `ui.scroll`, as each event reaches the app, and a press leaves a ripple. `"animate": false` on a call skips it |
@@ -351,6 +351,7 @@ One setting per line, sorted by name. A change that adds a setting adds its own 
 - `hole_snaps` (default false: a Single hole snaps to its face's middle and round edges' centres)
 - `language` (`en`, `ar`, `ja`, `de`, `fr`, `he`, `ko`, `ms`, `ru`, `uk`, `zh`; see [localization](localization.md))
 - `length_decimals`
+- `live_apply` (default false: the dialog holds every change until `Apply` or `OK`, and `Cancel`, Esc and the × discard it; true restores the older behaviour, where a change takes effect as it is made)
 - `logo_accent` (bool, default false: the application bar's logo in shades of the theme's accent instead of the theme's logo colours)
 - `look_at_anim`
 - `look_at_speed`
@@ -398,7 +399,7 @@ One setting per line, sorted by name. A change that adds a setting adds its own 
 Other `ui.prefs` parameters:
 
 - `open` (a page: General, Interface, Design, Navigation, Keyboard Shortcuts, Sketch, Graphics, AI, Plugins; Shortcuts, Assistant and Sketch & selection are aliases, and the former Selection page opens Sketch) opens the Preferences dialog there
-- `button`: `ok`, `cancel`, `apply`, `defaults`
+- `button`: `ok`, `cancel`, `apply`, `defaults`; while the dialog is open a setting lands in its draft — `ok` and `apply` apply it (and `ok` closes the dialog), `cancel` discards it, and `defaults` resets the current page's settings in the draft; `live_apply` restores the older behaviour, where a setting takes effect as it is made
 - `stand_up: true` stands up a just-opened Y-up file, `stand_up: false` leaves it as it is ("Leave it": the offer, dialog or note, closes and `offer_stand_up` stays on)
 - the dialog's buttons are the handles `stand_up:stand`, `stand_up:leave` and `stand_up:never`
 

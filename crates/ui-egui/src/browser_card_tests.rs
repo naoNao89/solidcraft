@@ -205,7 +205,9 @@ fn a_second_click_on_a_document_settings_entry_closes_its_window() {
         h.frames(2);
         assert!(h.app.prefs_window.open, "{mode:?}: the first click opens Preferences");
         let decimals = h.app.preferences.angle_decimals;
-        h.app.preferences.angle_decimals = decimals + 2;
+        // A change made while the dialog is open waits in its draft; closing with × discards it.
+        h.call("ui.prefs", json!({"angle_decimals": decimals + 2}));
+        assert_eq!(h.app.preferences.angle_decimals, decimals, "{mode:?}: the change waits in the dialog's draft");
         h.step(&row("Precision")).unwrap();
         h.frames(2);
         assert!(!h.app.prefs_window.open, "{mode:?}: the second click closes it");

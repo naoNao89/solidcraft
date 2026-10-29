@@ -356,7 +356,20 @@ fn hole_design_preferences_keep_both_controls_and_cancel_after_page_split() {
         let p = point.unwrap_or_else(|| panic!("Hole preference missing from Design: {label}"));
         h.call("ui.click", json!({"x":p.x,"y":p.y}));
     }
-    assert!(h.app.preferences.hole_snaps && h.app.preferences.hole_moves);
+    // The clicks edit the dialog's draft: the page shows both boxes ticked...
+    for label in ["Snap to face and edge centres", "Move holes by clicking or dragging"] {
+        assert!(shown_checked(&h, label), "{label} is ticked in the dialog");
+    }
+    // ...while the app keeps the saved values, and Cancel drops them.
+    assert!(!h.app.preferences.hole_snaps && !h.app.preferences.hole_moves);
     h.call("ui.prefs", json!({"button":"cancel"}));
     assert!(!h.app.preferences.hole_snaps && !h.app.preferences.hole_moves);
+}
+
+/// Is the checkbox labelled `label` ticked in what the last frame drew?
+fn shown_checked(h: &Harness, label: &str) -> bool {
+    h.output
+        .accesskit_update
+        .as_ref()
+        .is_some_and(|tree| tree.nodes.iter().any(|(_, node)| node.label() == Some(label) && node.toggled() == Some(egui::accesskit::Toggled::True)))
 }

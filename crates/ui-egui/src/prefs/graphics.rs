@@ -26,7 +26,13 @@ pub(super) fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
             });
             crate::scenario::publish_target("prefs:graphics_card", response.rect);
             if let Some(name) = requested {
-                let _ = super::set(app, &json!({"graphics_adapter": name}));
+                // Deferred (the dialog is open and `live_apply` is off): the draft holds the
+                // adapter, and Apply writes it to the graphics file. `set` would write it now.
+                if crate::prefs::deferring(app) {
+                    app.preferences.graphics_adapter = name;
+                } else {
+                    let _ = super::set(app, &json!({"graphics_adapter": name}));
+                }
             }
             ui_kit::text(ui, app.tr("prefs.graphics_card_restart"), ui_kit::Text::Hint("graphics_card_restart"));
             if missing {
@@ -42,7 +48,28 @@ pub(super) fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
                 let labels = [app.tr("ui.graphics_performance"), app.tr("ui.graphics_quality"), app.tr("ui.graphics_custom")];
                 let changed = ui_kit::segmented(ui, &mut selected, &labels, ui_kit::Segments::default());
                 if changed && let Some(preset) = presets.get(selected).filter(|preset| **preset != "custom") {
-                    let _ = app.run("view.graphics_preset", json!({"preset":preset}));
+                    // Deferred (the dialog is open and `live_apply` is off): the preset's own
+                    // settings go into the draft, and Apply puts them in the view. The command
+                    // would apply the preset now.
+                    if crate::prefs::deferring(app) {
+                        if let Ok(v) = app.session.execute("view.graphics_preset", &json!({"preset":preset})) {
+                            let (ao, quality, ssaa, adaptive) = (
+                                v["enabled"].as_bool(),
+                                v["display_quality"].as_str().map(str::to_owned),
+                                v["supersampling"].as_f64().map(|f| f as f32),
+                                v["supersampling_adaptive"].as_bool(),
+                            );
+                            let prefs = &mut app.preferences;
+                            prefs.ambient_occlusion = ao.unwrap_or(prefs.ambient_occlusion);
+                            if let Some(quality) = quality {
+                                prefs.display_quality = quality;
+                            }
+                            prefs.supersampling = ssaa.unwrap_or(prefs.supersampling);
+                            prefs.supersampling_adaptive = adaptive.unwrap_or(prefs.supersampling_adaptive);
+                        }
+                    } else {
+                        let _ = app.run("view.graphics_preset", json!({"preset":preset}));
+                    }
                 }
             });
         let rect = response.response.rect;
@@ -144,7 +171,14 @@ pub(super) fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
                     crate::scenario::publish_handle("view:ambient_occlusion", response.rect.center());
                 }
                 if response.clicked() {
-                    let _ = app.run("view.ambient_occlusion", json!({"enabled":on}));
+                    // Deferred (the dialog is open and `live_apply` is off): the draft holds the
+                    // choice, and Apply turns contact shading on or off. The command would do it
+                    // now.
+                    if crate::prefs::deferring(app) {
+                        app.preferences.ambient_occlusion = on;
+                    } else {
+                        let _ = app.run("view.ambient_occlusion", json!({"enabled":on}));
+                    }
                 }
             }
         });

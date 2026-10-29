@@ -2,9 +2,11 @@
 
 Cosmetic markings are **off by default**, including when preferences saved by an older
 version have no setting for them. Turn on **Preferences > Graphics > Cosmetic thread markings**
-to display them. The switch applies immediately, without moving the camera or rebuilding
-the design, and is saved in application preferences. Cancel, Apply and Restore Defaults
-follow the other Graphics settings. It is not a document property or a geometry feature.
+to display them. The switch is held with the dialog's other changes until you press
+**Apply** or **OK**, and Cancel discards it; switching it on turns the markings on
+without moving the camera or rebuilding the design, and it is saved in application
+preferences. Restore Defaults resets it like the other Graphics settings. It is not a
+document property or a geometry feature.
 
 Tapped Hole and non-modeled Thread features now mark the threaded cylindrical wall with
 original, slightly tilted bands. Plain holes remain smooth. Both internal and external

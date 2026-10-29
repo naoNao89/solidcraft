@@ -156,6 +156,10 @@ fn measurement_axis_distances_can_be_disabled_saved_and_restored_in_preferences(
     assert!(page.contains_rect(checkbox_rect), "the toggle must be visible before clicking: {checkbox_rect:?} in {page:?}");
     let checkbox = checkbox_rect.center();
     h.call("ui.click", json!({"x":checkbox.x,"y":checkbox.y}));
+    // The toggle edits the dialog's draft: the app keeps drawing the overlay until Apply.
+    assert!(h.app.preferences.measure_axis_distances, "the toggle waits in the draft");
+    assert!(crate::scenario::handle_at("measure:label:x").is_some());
+    h.call("ui.prefs", json!({"button":"apply"}));
     assert!(!h.app.preferences.measure_axis_distances);
     assert!(crate::scenario::handle_at("measure:label").is_some(), "total stays visible");
     assert!(crate::scenario::handle_at("measure:label:x").is_none());
@@ -167,13 +171,16 @@ fn measurement_axis_distances_can_be_disabled_saved_and_restored_in_preferences(
     restored.load_prefs(&h.app.prefs());
     assert!(!restored.preferences.measure_axis_distances, "disabled preference survives restart");
     h.call("ui.prefs", json!({"open":"Graphics","measure_axis_distances":true}));
-    assert!(crate::scenario::handle_at("measure:label:x").is_some());
+    assert!(!h.app.preferences.measure_axis_distances, "the change waits in the draft");
+    assert!(crate::scenario::handle_at("measure:label:x").is_none(), "the view keeps the applied choice");
     h.call("ui.prefs", json!({"button":"cancel"}));
     assert!(!h.app.preferences.measure_axis_distances, "Cancel restores the saved choice");
     h.call("ui.prefs", json!({"open":"Graphics"}));
     h.call("ui.prefs", json!({"button":"defaults"}));
-    assert!(h.app.preferences.measure_axis_distances);
+    assert!(!h.app.preferences.measure_axis_distances, "Defaults resets the page in the draft");
     h.call("ui.prefs", json!({"button":"apply"}));
+    assert!(h.app.preferences.measure_axis_distances);
+    assert!(crate::scenario::handle_at("measure:label:x").is_some(), "the overlay is back once it is applied");
     h.call("ui.prefs", json!({"measure_axis_distances":false}));
     h.call("ui.prefs", json!({"button":"cancel"}));
     assert!(h.app.preferences.measure_axis_distances, "Cancel restores the last Apply");

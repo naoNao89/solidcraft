@@ -1,0 +1,42 @@
+{
+  "en": {
+    "prefs.live_apply": "Apply changes as they are made",
+    "prefs.live_apply_note": "Off (the default): the dialog holds every change until you press Apply or OK, and Cancel discards it. On: each change takes effect as you make it, as in older versions."
+  },
+  "ar": {
+    "prefs.live_apply": "تطبيق التغييرات فور إجرائها",
+    "prefs.live_apply_note": "معطّل (افتراضي): يبقى كل تغيير معلّقًا حتى تضغط «تطبيق» أو «موافق»، ويلغيه «إلغاء». مفعّل: يسري كل تغيير فور إجرائه كما في الإصدارات السابقة."
+  },
+  "de": {
+    "prefs.live_apply": "Änderungen sofort übernehmen",
+    "prefs.live_apply_note": "Aus (Standard): Änderungen werden bis zum Drücken von „Übernehmen“ oder „OK“ zurückgehalten, und „Abbrechen“ verwirft sie. Ein: Jede Änderung wirkt sofort, wie in älteren Versionen."
+  },
+  "es": {
+    "prefs.live_apply": "Aplicar los cambios a medida que se hacen",
+    "prefs.live_apply_note": "Desactivado (predeterminado): los cambios se retienen hasta que pulses Aplicar o Aceptar, y Cancelar los descarta. Activado: cada cambio surte efecto a medida que lo haces, como en versiones anteriores."
+  },
+  "fr": {
+    "prefs.live_apply": "Appliquer les modifications au fur et à mesure",
+    "prefs.live_apply_note": "Désactivé (par défaut) : les modifications sont conservées jusqu'à ce que vous cliquiez sur Appliquer ou OK, et Annuler les écarte. Activé : chaque modification prend effet dès que vous la faites, comme dans les versions précédentes."
+  },
+  "he": {
+    "prefs.live_apply": "החלת שינויים עם ביצועם",
+    "prefs.live_apply_note": "כבוי (ברירת מחדל): כל שינוי מוחזק עד ללחיצה על 'החל' או 'אישור', ו'ביטול' משליך אותו. פועל: כל שינוי נכנס לתוקף מיד עם ביצועו, כמו בגרסאות קודמות."
+  },
+  "ja": {
+    "prefs.live_apply": "変更をすぐに適用",
+    "prefs.live_apply_note": "オフ（既定）: 「適用」または「OK」を押すまで変更は保持され、「キャンセル」で破棄されます。オン: 各変更は行った時点で反映され、以前のバージョンと同じです。"
+  },
+  "ko": {
+    "prefs.live_apply": "변경 사항 즉시 적용",
+    "prefs.live_apply_note": "끄기(기본값): 적용 또는 확인을 누를 때까지 변경 사항이 보류되고 취소하면 버려집니다. 켜기: 각 변경이 이루어지는 즉시 적용되며, 이전 버전과 같습니다."
+  },
+  "vi": {
+    "prefs.live_apply": "Áp dụng thay đổi ngay khi thực hiện",
+    "prefs.live_apply_note": "Tắt (mặc định): mọi thay đổi được giữ cho đến khi bạn nhấn Áp dụng hoặc OK, và Hủy sẽ bỏ chúng. Bật: mỗi thay đổi có hiệu lực ngay khi bạn thực hiện, như các phiên bản cũ."
+  },
+  "zh": {
+    "prefs.live_apply": "更改立即生效",
+    "prefs.live_apply_note": "关闭（默认）：更改会保留到您单击“应用”或“确定”，取消则将其丢弃。打开：每项更改在您做出时立即生效，与旧版本相同。"
+  }
+}

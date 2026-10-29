@@ -111,7 +111,13 @@ fn footer(app: &mut SolveApp, ui: &mut egui::Ui, state: &mut State) {
         let response = ui_kit::checkbox(ui, app.tr("navbar.custom.show"), &mut visible);
         scenario::publish_target("prefs:navbar:show", response.rect);
         if response.changed() {
-            let _ = app.run("view.navigation_bar", json!({"visible":visible}));
+            // Deferred (the dialog is open and `live_apply` is off): the draft holds the bar's
+            // visibility, and Apply shows or hides it. The command would do it now.
+            if crate::prefs::deferring(app) {
+                app.ui.show_navigation_bar = visible;
+            } else {
+                let _ = app.run("view.navigation_bar", json!({"visible":visible}));
+            }
         }
     });
     let response = ui_kit::button_at(ui, "navbar_reset", reset, label, ui_kit::Button::Normal);
@@ -119,7 +125,13 @@ fn footer(app: &mut SolveApp, ui: &mut egui::Ui, state: &mut State) {
     scenario::publish_rect("prefs:navbar:status", rect);
     if response.clicked() {
         app.preferences.navigation_bar = NavigationBar::default();
-        let _ = app.run("view.navigation_bar", json!({"visible":true}));
+        // Deferred (the dialog is open and `live_apply` is off): the draft holds the reset bar
+        // and its visibility, and Apply shows it. The command would show it now.
+        if crate::prefs::deferring(app) {
+            app.ui.show_navigation_bar = true;
+        } else {
+            let _ = app.run("view.navigation_bar", json!({"visible":true}));
+        }
         state.selected = None;
         state.notice = None;
     }

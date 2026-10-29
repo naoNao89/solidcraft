@@ -9,7 +9,13 @@ pub(super) fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
             .on_hover_text(app.tr("prefs.sketch_tracking_guides_note"));
         let mut auto = app.session.auto_project;
         if ui_kit::checkbox(ui, crate::i18n::tr_label("Project face edges into new sketches"), &mut auto).changed() {
-            let _ = app.run("sketch.auto_project", json!({"value": auto}));
+            // Deferred (the dialog is open and `live_apply` is off): the draft holds the choice,
+            // and Apply runs the command for it.
+            if crate::prefs::deferring(app) {
+                app.session.auto_project = auto;
+            } else {
+                let _ = app.run("sketch.auto_project", json!({"value": auto}));
+            }
         }
         ui_kit::checkbox(ui, crate::i18n::tr_label("Pressing a tool's shortcut again switches its mode"), &mut app.preferences.shortcut_cycles_modes)
             .on_hover_text(crate::i18n::tr_label(

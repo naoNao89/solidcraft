@@ -10434,8 +10434,9 @@ mod tests {
         assert_eq!(by.sketch_projected, off.sketch_projected);
     }
 
-    /// The mode is on from the next frame (theme, widgets, caches, `ui.render`), and Cancel puts
-    /// it back.
+    /// The mode is on from the next frame (theme, widgets, caches, `ui.render`) once it is
+    /// applied; while the dialog holds it as a draft nothing outside it follows, and Cancel
+    /// discards the draft.
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn colour_vision_mode_reaches_the_frame_and_the_view_caches() {
@@ -10449,14 +10450,31 @@ mod tests {
         let before = keys(&h.app);
         h.step(&json!({"click":{"handle":"dialog:Mode:Deutan"}})).unwrap();
         h.frame();
+        // The tile edits the dialog's draft: nothing outside it follows until Apply.
+        assert_eq!(crate::theme::vision(), ColorVision::Off);
+        assert_eq!(keys(&h.app), before);
+        h.call("ui.prefs", json!({"button": "cancel"}));
+        h.frame();
+        assert_eq!((h.app.preferences.color_vision, crate::theme::vision()), (ColorVision::Off, ColorVision::Off), "Cancel drops it");
+        assert_eq!(keys(&h.app), before);
+        // Applied, it is on from the next frame: the theme, the widgets and both view caches.
+        h.call("ui.prefs", json!({"open": "Interface", "color_vision": "deutan"}));
+        h.call("ui.prefs", json!({"button": "apply"}));
+        h.frame();
         assert_eq!(crate::theme::vision(), ColorVision::Deutan);
         assert_eq!(Tokens::get(), Tokens::themed(crate::theme::is_dark(), ColorVision::Deutan));
         let after = keys(&h.app);
         assert!(before.0 != after.0 && before.1 != after.1, "both caches are keyed on the mode");
         h.call("ui.prefs", json!({"button": "cancel"}));
+        assert_eq!(
+            (h.app.preferences.color_vision, crate::theme::vision()),
+            (ColorVision::Deutan, ColorVision::Deutan),
+            "Cancel keeps the last Apply"
+        );
+        // Back to Off with the dialog closed, for the render check below.
+        h.call("ui.prefs", json!({"color_vision": "off"}));
         h.frame();
-        assert_eq!((h.app.preferences.color_vision, crate::theme::vision()), (ColorVision::Off, ColorVision::Off));
-        assert_eq!(keys(&h.app), before);
+        assert_eq!(crate::theme::vision(), ColorVision::Off);
         // `ui.render` shows the mode too: a fixed sketch line in Deutan's value (in the light
         // theme, where the red-green table changes it; the render follows the theme).
         if !crate::gpu::test_picture_renderer() {

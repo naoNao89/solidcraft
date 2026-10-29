@@ -352,8 +352,10 @@ fn theme_switches_refresh_cached_viewport_colours_without_remeshing() {
     }
 }
 
+/// A theme tile chosen while the dialog is open edits its draft: nothing outside the dialog
+/// follows until Apply, and Cancel discards the choice.
 #[test]
-fn cancelling_theme_preview_restores_viewport_palette_keys() {
+fn theme_chosen_in_preferences_waits_for_apply_and_cancel_discards_it() {
     let mut h = crate::scenario::Harness::new();
     h.app.home.open = false;
     h.call("ui.prefs", json!({"theme": "gruvbox-dark"}));
@@ -363,10 +365,15 @@ fn cancelling_theme_preview_restores_viewport_palette_keys() {
     h.call("ui.prefs", json!({"open": "Interface"}));
     h.call("ui.prefs", json!({"theme": "blueprint"}));
     h.frame();
-    assert_ne!(keys(&h.app), before);
+    assert_eq!(keys(&h.app), before, "the tile waits in the draft");
     h.call("ui.prefs", json!({"button": "cancel"}));
     h.frame();
-    assert_eq!(keys(&h.app), before);
+    assert_eq!(keys(&h.app), before, "Cancel discards the chosen theme");
+    h.call("ui.prefs", json!({"open": "Interface", "theme": "blueprint"}));
+    h.call("ui.prefs", json!({"button": "apply"}));
+    h.frame();
+    assert_ne!(keys(&h.app), before, "Apply turns the viewport palette over");
+    h.call("ui.prefs", json!({"button": "ok"}));
     // Replacing an imported palette keeps its id and base but still changes geometry colours.
     let custom = |color| json!({"format":"solidcraft-theme/1","name":"Viewport test","base":"dark","colors":{"body":color}});
     h.call("ui.prefs", json!({"theme_import": custom("#abcdef")}));

@@ -944,6 +944,9 @@ fn dialog_place_is_saved_and_survives_cancel_defaults_and_bad_input() {
     h.call("ui.prefs", json!({"open":"Interface"}));
     crate::prefs::reveal_preference(&mut h, "dialog:Dialogs:In the left column");
     h.step(&json!({"click":{"handle":"dialog:Dialogs:In the left column"}})).unwrap();
+    // The radio edits the dialog's draft: Apply lands it on the app.
+    assert_eq!(h.app.preferences.dialog_place, DialogPlace::Edge, "the click waits in the draft");
+    h.call("ui.prefs", json!({"button":"apply"}));
     assert_eq!(h.app.preferences.dialog_place, DialogPlace::LeftColumn);
     h.call("ui.prefs", json!({"button":"ok"}));
     h.settle();
@@ -957,8 +960,10 @@ fn dialog_place_is_saved_and_survives_cancel_defaults_and_bad_input() {
     assert_eq!(h.app.preferences.dialog_place, DialogPlace::LeftColumn);
     h.call("ui.prefs", json!({"open":"Interface"}));
     h.call("ui.prefs", json!({"button":"defaults"}));
-    assert_eq!(h.app.preferences.dialog_place, DialogPlace::Edge);
+    // Restore Defaults resets the page in the draft; OK lands it on the app.
+    assert_eq!(h.app.preferences.dialog_place, DialogPlace::LeftColumn, "Defaults waits in the draft");
     h.call("ui.prefs", json!({"button":"ok"}));
+    assert_eq!(h.app.preferences.dialog_place, DialogPlace::Edge);
     assert!(crate::prefs::set(&mut h.app, &json!({"dialog_place":"top"})).is_err());
     assert_eq!(h.app.preferences.dialog_place, DialogPlace::Edge);
     restored.load_prefs(r#"{"preferences":{"dialog_place":"top","default_units":"in"}}"#);
