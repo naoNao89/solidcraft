@@ -69,6 +69,11 @@ fn language_preference_cancel_restores_previous_locale() {
     h.call("ui.prefs", json!({"open":"General"}));
     h.call("ui.prefs", json!({"language":"ja"}));
     assert!(h.widget("言語").is_some());
+    // The dialog's own frame follows the draft too: a label that reads the frame's locale
+    // (`crate::i18n::tr`, here Restore Defaults) turns Japanese with it, and its font is installed,
+    // so the pages' `app.tr` and these agree instead of half the dialog staying in the old language.
+    assert!(h.widget("初期値に戻す").is_some(), "the Restore Defaults button follows the draft");
+    assert_eq!(h.app.applied_fonts_language, "ja", "the draft's font is installed while the dialog holds it");
     assert_eq!(h.app.preferences.language, "en", "the draft language is not committed yet");
     assert_eq!(h.app.tr("ui.preferences"), "Preferences");
     h.call("ui.prefs", json!({"button":"apply"}));
@@ -79,6 +84,7 @@ fn language_preference_cancel_restores_previous_locale() {
     h.call("ui.prefs", json!({"button":"cancel"}));
     assert_eq!(h.app.preferences.language, "ja", "Cancel restores the last Apply");
     assert_eq!(h.app.tr("ui.preferences"), "環境設定");
+    assert_eq!(h.app.applied_fonts_language, "ja", "and the app's own fonts are back");
 }
 
 /// The chrome a user sees before touching anything: the browser heading and the SELECT panel.
