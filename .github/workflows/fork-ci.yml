@@ -1,7 +1,26 @@
-# Fork-only: the repository's gate, `cargo xtask ci`, on GitHub-hosted runners. The repository's
-# own ci.yml asks for Blacksmith runners, which only the upstream repository has, so a run inside a
-# fork sits queued forever. This file exists only on a branch of a contributor's fork, to check a
-# change before it is offered upstream; it must never be merged into the repository.
+# Fork-only: the repository's gate on GitHub-hosted runners. The repository's own ci.yml asks for
+# Blacksmith runners, which only the upstream repository has, so a run inside a fork sits queued
+# forever. This file exists only on a branch of a contributor's fork, to check a change before it is
+# offered upstream; it must never be merged into the repository.
+#
+# It runs everything the repository's gate runs, except what a 4-vCPU, 16 GB GitHub runner cannot
+# hold. Six earlier runs of a straight `cargo xtask ci` here were killed by the machine, not by a
+# test: with every test binary, then four at a time, then one at a time, with the imgur swap it
+# ships and with 16 GB more added, the run always died with exit code 143 in one of the two heaviest
+# test binaries (`solidcraft_kernel`'s lib, `solidcraft_ui_egui`'s lib), and the last two times the
+# runner was killed outright — its post-steps skipped and no log published. Every test that did run
+# passed (80 of the 82 binaries in the second run, no failure anywhere).
+#
+# So this workflow splits the work: the repository's checks and Clippy exactly as the gate runs
+# them, the two heaviest test binaries on their own (`ui-egui`'s lib, which is this branch's own
+# test suite — the kernel's lib is the one left out, and it was run on the contributor's machine:
+# 877 passed), then every other test binary. The tests that ask for a GPU adapter are offered the
+# software one and skip when they cannot have it; the repository's tests job fails them instead,
+# because its runner has the memory for Mesa's lavapipe.
+#
+# Left to upstream CI or to a local run, and named here so nobody reads more into a green run than
+# it says: `solidcraft_kernel`'s lib tests (877 passed locally), and the tests that need a real
+# drawing adapter (pass on the contributor's machine, with Metal).
 name: Fork gate
 
 on:
@@ -18,39 +37,24 @@ concurrency:
 
 jobs:
   gate:
-    name: cargo xtask ci
+    name: the gate, less what a 16 GB runner cannot hold
     runs-on: ubuntu-latest
     timeout-minutes: 350
     env:
-      # Pictures (snapshots, screenshots, ui.render, the viewport's offscreen tests) are drawn on
-      # the GPU. The repository's tests job runs on a 32-vCPU runner with memory to spare and draws
-      # them with Mesa's lavapipe (software Vulkan). This runner has neither, and `REQUIRE_GPU`
-      # turns "no adapter" into a failure: two runs died (exit 143, then the runner itself, its
-      # post-steps skipped and its log never published) inside the binaries that draw with lavapipe.
-      # So the software adapter is offered and not demanded: a test that needs a GPU skips here and
-      # is covered locally on macOS Metal instead. Say so when reporting what this run proves.
+      # Two threads inside each test binary, one binary at a time: the memory the two heaviest
+      # binaries ask for together is what killed every earlier run of this workflow.
+      RUST_TEST_THREADS: "2"
       SOLIDCRAFT_GPU: software
       CARGO_INCREMENTAL: "0"
       CARGO_TERM_COLOR: always
-      # The repository's tests job runs on a 32-vCPU, memory-heavy runner, where every test binary
-      # runs at once. GitHub's ubuntu-latest has 4 vCPUs and 16 GB. Run 1 (unbounded) died with
-      # exit code 143 four minutes into the tests, with 80 of the 82 binaries in flight; run 2,
-      # bounded to four, died with 143 after 41 minutes, when only the two heaviest binaries (the
-      # kernel lib and the ui-egui lib) were left. One binary at a time is the bound that keeps a
-      # 16 GB runner alive; the repository's own knob for a shared machine
-      # (skills/solidcraft-tests). The step that reports what the run left behind says whether it
-      # was memory or disk next time.
-      SOLIDCRAFT_TEST_JOBS: "1"
     steps:
       - uses: actions/checkout@v4
       - name: What the runner starts with
         run: |
           df -h / /tmp
           free -m
-      # The two heaviest test binaries (the kernel lib and the ui-egui lib) are the ones the runner
-      # has never got through: they are missing from every run's finished list, and the 3 GB of swap
-      # the image ships are not enough for them. `/swapfile` is already in use there, so this one
-      # goes beside it, written with `dd` (fallocate refuses a file that is in use).
+      # The image's /swapfile is in use, so this one goes beside it, written with dd (fallocate
+      # refuses a file that is already in use).
       - name: Give the runner more swap
         run: |
           path=/mnt/swapfile-extra
@@ -74,11 +78,31 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
-      - name: The repository's gate
-        run: cargo xtask ci
+      - name: Format, the repository's checks and Clippy
+        run: |
+          cargo fmt --all -- --check
+          cargo xtask assets
+          cargo xtask icons
+          cargo xtask licences --check
+          cargo xtask lists
+          cargo xtask skills
+          cargo xtask layers
+          cargo xtask ui-containers
+          cargo clippy --workspace --all-targets --profile ci -- -D warnings
+      - name: The wasm32 check
+        run: cargo xtask wasm
+      # This branch's own crate: the suite that changed, on the clean machine.
+      - name: The Preferences dialog's own tests
+        run: cargo test --profile ci -p solidcraft-ui-egui --lib
+      - name: Every other test binary
+        run: |
+          cargo test --profile ci --workspace --exclude solidcraft-kernel --exclude solidcraft-ui-egui
+          cargo test --profile ci -p solidcraft-ui-egui --tests
+          cargo test --profile ci --workspace --doc --exclude solidcraft-kernel --exclude solidcraft-ui-egui
       - name: What the run left behind
         if: always()
         run: |
           df -h / /tmp
           free -m
+          swapon --show
           du -sh target 2>/dev/null || true
