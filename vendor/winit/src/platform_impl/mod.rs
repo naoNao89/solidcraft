@@ -1,6 +1,10 @@
 use crate::monitor::{MonitorHandle as RootMonitorHandle, VideoModeHandle as RootVideoModeHandle};
 use crate::window::Fullscreen as RootFullscreen;
 
+// SolidCraft: the text-input decisions macOS and the tests use (ime_text.rs). Not a platform
+// module: it holds no AppKit, so it is compiled and tested on every host.
+pub(crate) mod ime_text;
+
 #[cfg(android_platform)]
 mod android;
 #[cfg(ios_platform)]

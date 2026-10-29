@@ -365,3 +365,28 @@ SolidCraft changes:
   (the `wp::pointer_gestures` module); drop the example and test targets.
 - `src/event.rs`, `src/changelog/unreleased.md`: the platform notes of both events and the
   changelog entry.
+- `src/platform_impl/macos/view.rs`: `insertText:replacementRange:` committed the string the
+  input method handed over only while winit still held marked text, so the key that *ends* a
+  composition was dropped: an input method ends one by clearing its marked text and then handing
+  over the key itself — the space after a Vietnamese Telex syllable — and that space never reached
+  the application, so it had to be typed twice (egui's `TextEdit` inserts an `Ime::Commit` and the
+  `KeyboardInput` of that key is not forwarded either). A stock Cocoa client — an `NSTextView`
+  in a plain window, given the very same key events and the same input source — does insert that
+  space (typing `tieengs ` there gives `tiếng `, and `tiếng tiếng ` for two syllables), so the
+  text system hands the key over to be inserted and winit was the layer dropping it. Backport of
+  rust-windowing/winit#4651 (merged into winit's master; the 0.30 backport
+  rust-windowing/winit#4650 is still open, and eframe 0.36 requires winit 0.30). The
+  `validAttributesForMarkedText` part of that change is not taken: no input method in use here
+  needs it to enter composition.
+- `src/platform_impl/ime_text.rs` (new) and `src/platform_impl/mod.rs`: the composition the view
+  tracks and what `insertText:` does with the string it is handed — clear the preedit it replaces,
+  and commit it — as a module without AppKit, so its regression test runs where the tests run.
+  Neither this project's CI (Ubuntu and Windows only) nor its merge-queue jobs compile
+  `src/platform_impl/macos/`, so a test sitting next to that code would never run: `cargo xtask
+  ci` and the `checks` job run `cargo test -p winit --lib`, which reaches the module on Linux.
+  The test replays the recorded `NSTextInputClient` sequence of a Vietnamese Telex run
+  (`setMarkedText("t")` … `insertText("tiếng")`, `setMarkedText("")`, `insertText(" ")`) and
+  asserts the space is committed; upstream does not test this path at all, and the projects that
+  do factor the same kind of decision out of their platform code to get it tested on Linux
+  (wxWidgets' `wxTextInputClient`, Chromium's `ui/base/ime` fakes), while SDL, GLFW, Qt's macOS
+  plugin and GTK's macOS backend have only interactive programs for it.

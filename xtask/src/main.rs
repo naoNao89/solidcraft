@@ -402,6 +402,13 @@ fn cmd_ci() -> Result<(), String> {
     skills::run(&root())?;
     cmd_layers()?;
     ui_containers::run(&root())?;
+    // The vendored crates are outside the workspace, so `clippy --workspace` and the workspace
+    // tests never see them: the text-input decisions macOS uses are checked here (see
+    // vendor/README.md). Nothing on CI compiles the macOS half of that crate, which is why the
+    // decisions live in a module of its own.
+    let mut c = cargo();
+    c.args(["test", "--profile", "ci", "-p", "winit", "--lib", "--locked"]);
+    run(c, "cargo test -p winit --lib (the vendored crate's decisions)")?;
     let mut c = cargo();
     c.args(["clippy", "--workspace", "--all-targets", "--profile", "ci", "--", "-D", "warnings"]);
     run(c, "cargo clippy -D warnings")?;

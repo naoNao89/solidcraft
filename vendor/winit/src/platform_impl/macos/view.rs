@@ -31,6 +31,7 @@ use crate::event::{
 };
 use crate::keyboard::{Key, KeyCode, KeyLocation, ModifiersState, NamedKey};
 use crate::platform::macos::OptionAsAlt;
+use crate::platform_impl::ime_text::TextInput;
 
 #[derive(Debug)]
 struct CursorState {
@@ -121,6 +122,13 @@ pub struct ViewState {
     tracking_rect: Cell<Option<NSTrackingRectTag>>,
     ime_state: Cell<ImeState>,
     input_source: RefCell<String>,
+
+    /// The input method's composition: which string `insertText:` commits.
+    ///
+    /// SolidCraft: backport of rust-windowing/winit#4651 (macOS `insertText:` discarded the text
+    /// that ends a composition; rust-windowing/winit#3925). The decisions live in
+    /// `platform_impl::ime_text`, so their regression test runs where the tests run.
+    text_input: RefCell<TextInput>,
 
     /// True iff the application wants IME events.
     ///
@@ -310,6 +318,10 @@ declare_class!(
                 // In case the preedit was cleared, set IME into the Ground state.
                 self.ivars().ime_state.set(ImeState::Ground);
             }
+            // SolidCraft: a composition is under way until `insertText:` consumes it. The input
+            // method ends one by clearing its marked text here and *then* handing over the key that
+            // ended it, which is why the commit cannot be read off the marked text (winit#4651).
+            self.ivars().text_input.borrow_mut().set_marked_text();
 
             let cursor_range = if string.is_empty() {
                 // An empty string basically means that there's no preedit, so indicate that by
@@ -407,9 +419,16 @@ declare_class!(
 
             let is_control = string.chars().next().is_some_and(|c| c.is_control());
 
-            // Commit only if we have marked text.
-            if unsafe { self.hasMarkedText() } && self.is_ime_enabled() && !is_control {
+            // SolidCraft: the input method clears its marked text *before* handing over the key
+            // that ended the composition, so `hasMarkedText()` alone cannot say whether the string
+            // is input — `insert_text` decides it from the composition it tracks (winit#4651).
+            let has_marked_text = unsafe { self.hasMarkedText() };
+            let ime_enabled = self.is_ime_enabled();
+            let what = self.ivars().text_input.borrow_mut().insert_text(has_marked_text, ime_enabled, is_control);
+            if what.clear_preedit {
                 self.queue_event(WindowEvent::Ime(Ime::Preedit(String::new(), None)));
+            }
+            if what.commit {
                 self.queue_event(WindowEvent::Ime(Ime::Commit(string)));
                 self.ivars().ime_state.set(ImeState::Committed);
             }
@@ -801,6 +820,7 @@ impl WinitView {
             tracking_rect: Default::default(),
             ime_state: Default::default(),
             input_source: Default::default(),
+            text_input: Default::default(),
             ime_allowed: Default::default(),
             forward_key_to_app: Default::default(),
             marked_text: Default::default(),
@@ -888,6 +908,9 @@ impl WinitView {
 
         // Clear markedText
         *self.ivars().marked_text.borrow_mut() = NSMutableAttributedString::new();
+        // SolidCraft: no composition is under way any more, so a later `insertText:` is not a
+        // commit (winit#4651).
+        self.ivars().text_input.borrow_mut().ime_disallowed();
 
         if self.ivars().ime_state.get() != ImeState::Disabled {
             self.ivars().ime_state.set(ImeState::Disabled);
