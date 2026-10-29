@@ -23,10 +23,13 @@ jobs:
     timeout-minutes: 350
     env:
       # Pictures (snapshots, screenshots, ui.render, the viewport's offscreen tests) are drawn on
-      # the GPU. The runner has none: Mesa's lavapipe (software Vulkan) draws them, and a test that
-      # would skip for want of an adapter fails instead. The repository's tests job sets these too.
+      # the GPU. The repository's tests job runs on a 32-vCPU runner with memory to spare and draws
+      # them with Mesa's lavapipe (software Vulkan). This runner has neither, and `REQUIRE_GPU`
+      # turns "no adapter" into a failure: two runs died (exit 143, then the runner itself, its
+      # post-steps skipped and its log never published) inside the binaries that draw with lavapipe.
+      # So the software adapter is offered and not demanded: a test that needs a GPU skips here and
+      # is covered locally on macOS Metal instead. Say so when reporting what this run proves.
       SOLIDCRAFT_GPU: software
-      SOLIDCRAFT_REQUIRE_GPU: "1"
       CARGO_INCREMENTAL: "0"
       CARGO_TERM_COLOR: always
       # The repository's tests job runs on a 32-vCPU, memory-heavy runner, where every test binary
