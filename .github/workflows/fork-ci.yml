@@ -25,7 +25,7 @@ name: Fork gate
 
 on:
   push:
-    branches: [ci/fork-github-runners]
+    branches: [ci/fork-github-runners, ci/ime-red-first]
   workflow_dispatch:
 
 permissions:
@@ -78,6 +78,11 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
+      # The vendored crates are outside the workspace, so the workspace clippy and tests never see
+      # them; the repository's gate runs this in its `checks` job, on a Blacksmith runner a fork
+      # does not have.
+      - name: The vendored winit's decisions
+        run: cargo test --profile ci -p winit --lib --locked
       - name: Format, the repository's checks and Clippy
         run: |
           cargo fmt --all -- --check
