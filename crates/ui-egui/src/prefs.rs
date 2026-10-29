@@ -1329,7 +1329,9 @@ pub fn open_at(app: &mut SolveApp, page: usize) {
     app.prefs_window.section = page.min(PAGES.len() - 1);
 }
 
-/// Every setting the dialog changes, for Cancel and Restore Defaults.
+/// Every setting the dialog changes: the basis Cancel returns to, and the draft the pages edit.
+/// A page that starts editing a setting must write one of these fields — a value outside them is
+/// put in place as it is made, draft or no draft, and survives Cancel.
 #[derive(Clone)]
 struct Snapshot {
     prefs: Prefs,
@@ -1516,6 +1518,20 @@ pub(crate) fn deferring(app: &SolveApp) -> bool {
 /// The `live_apply` in effect: the dialog's basis while it holds a session, else the app's own.
 fn live_apply_in_effect(app: &SolveApp) -> bool {
     app.prefs_window.snapshot.as_ref().map_or(app.preferences.live_apply, |basis| basis.prefs.live_apply)
+}
+
+/// Follow the draft's language while the dialog is drawn: this frame's locale (so the labels
+/// [`crate::i18n::tr`] answers match the `app.tr` the pages use) and the fonts its script needs.
+/// The app's per-frame guard compares the language in effect against the one it installed, so it
+/// puts the committed language's fonts back after a Cancel, and installs nothing extra after an
+/// Apply, which commits the same language.
+fn draft_language(app: &mut SolveApp, ctx: &egui::Context) -> crate::i18n::LanguageScope {
+    if app.preferences.language != app.applied_fonts_language || app.preferences.ui_font != app.applied_ui_font {
+        crate::fonts::setup_fonts_without_waiting(ctx, &app.preferences.language, &app.preferences.ui_font);
+        app.applied_fonts_language.clone_from(&app.preferences.language);
+        app.applied_ui_font.clone_from(&app.preferences.ui_font);
+    }
+    crate::i18n::scope(&app.preferences.language)
 }
 
 /// Begin the dialog's session if it has none: the basis Cancel returns to, and the draft the pages
@@ -2221,6 +2237,13 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     let mut selected = app.prefs_window.section;
     // The pages edit the draft, so the rest of the frame keeps seeing the values in effect.
     let (closed, action) = editing(app, |app| {
+        // The dialog draws the language it is choosing. Its own labels read the draft, and the ones
+        // `crate::i18n::tr` answers read this frame's locale, which the app installed from the
+        // value in effect: scope them to the draft too, and install the draft's fonts, or half the
+        // dialog stays in the old language and a script the draft needs draws as empty boxes until
+        // Apply or OK. Either way the app's own guard puts its language's fonts back, on Cancel as
+        // on Apply (`SolveApp::logic`).
+        let _language = draft_language(app, ctx);
         let shown = window.show_pages_with_header(ctx, &mut selected, WINDOW_PAGES, app, search_header, clear_search, |ui| {
             if ui_kit::button(ui, crate::i18n::tr("ui.restore_defaults"), ui_kit::Button::Normal)
                 .on_hover_text(crate::i18n::tr("ui.reset_the_settings_on_this_page"))
