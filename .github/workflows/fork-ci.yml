@@ -44,12 +44,18 @@ jobs:
         run: |
           df -h / /tmp
           free -m
-      - name: Give the runner some swap
+      # The two heaviest test binaries (the kernel lib and the ui-egui lib) are the ones the runner
+      # has never got through: they are missing from every run's finished list, and the 3 GB of swap
+      # the image ships are not enough for them. `/swapfile` is already in use there, so this one
+      # goes beside it, written with `dd` (fallocate refuses a file that is in use).
+      - name: Give the runner more swap
         run: |
-          sudo fallocate -l 16G /swapfile
-          sudo chmod 600 /swapfile
-          sudo mkswap /swapfile
-          sudo swapon /swapfile
+          path=/mnt/swapfile-extra
+          [ -d /mnt ] || path=/swapfile-extra
+          sudo dd if=/dev/zero of="$path" bs=1M count=16384 status=none
+          sudo chmod 600 "$path"
+          sudo mkswap "$path" >/dev/null
+          sudo swapon "$path"
           swapon --show
           free -m
       - name: Install the libraries the build and the tests need
