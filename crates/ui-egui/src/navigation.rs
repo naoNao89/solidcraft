@@ -1761,10 +1761,16 @@ mod tests {
             assert_eq!(serde_json::to_value(&loaded).unwrap()["wheel_zoom_speed"], 1.0);
             assert!(loaded.zoom_reverse);
         }
+        // Restore Defaults resets the page in the dialog's draft: nothing lands until Apply, and a
+        // Cancel discards the held reset.
         crate::prefs::control(&mut app, &json!({"button":"defaults"})).unwrap();
-        assert_eq!(serde_json::to_value(&app.preferences).unwrap()["wheel_zoom_speed"], 1.0);
+        assert_eq!(serde_json::to_value(&app.preferences).unwrap()["wheel_zoom_speed"], 2.5, "the reset waits in the draft");
         crate::prefs::control(&mut app, &json!({"button":"cancel"})).unwrap();
-        assert_eq!(serde_json::to_value(&app.preferences).unwrap()["wheel_zoom_speed"], 2.5);
+        assert_eq!(serde_json::to_value(&app.preferences).unwrap()["wheel_zoom_speed"], 2.5, "Cancel discards the held reset");
+        // Opened again, Apply puts the page's defaults in place.
+        crate::prefs::control(&mut app, &json!({"open":"Navigation","button":"defaults"})).unwrap();
+        crate::prefs::control(&mut app, &json!({"button":"apply"})).unwrap();
+        assert_eq!(serde_json::to_value(&app.preferences).unwrap()["wheel_zoom_speed"], 1.0, "Apply lands the page's defaults");
     }
 
     #[test]

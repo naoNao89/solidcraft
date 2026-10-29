@@ -1,5 +1,7 @@
-//! Grouped preferences composed with the shared UI kit. Changes apply immediately; Cancel
-//! restores the opening snapshot, Apply keeps editing, and Defaults affects the current page.
+//! Grouped preferences composed with the shared UI kit. While the dialog is open its edits are
+//! held in a draft: Apply and OK put the draft in place, and Cancel, Esc and × discard it. With
+//! `live_apply` on, each change takes effect as it is made and Cancel restores the opening
+//! snapshot (the older behaviour). Defaults affects the current page's draft.
 
 use egui::{Modifiers, Pos2};
 use serde::{Deserialize, Serialize};
@@ -796,6 +798,13 @@ macro_rules! preference_settings {
             fn default() -> Self { Self { $($field: $default,)* } }
         }
 
+        impl Prefs {
+            /// Take up every field `live` holds differently from `installed`.
+            fn adopt_edits_outside(&mut self, live: &Prefs, installed: &Prefs) {
+                $(if live.$field != installed.$field { self.$field = live.$field.clone(); })*
+            }
+        }
+
         fn reset_preferences(p: &mut Prefs, page: usize) {
             let d = Prefs::default();
             $($(if page == $page { p.$field = d.$field; })?)*
@@ -819,6 +828,10 @@ macro_rules! preference_settings {
     };
     (@control $app:ident, $ui:ident, $field:ident, check_tr($label:literal)) => {
         ui_kit::checkbox($ui, crate::i18n::tr($label), &mut $app.preferences.$field)
+    };
+    (@control $app:ident, $ui:ident, $field:ident, check_id($label:literal, $help:literal)) => {
+        ui_kit::checkbox($ui, $app.tr($label), &mut $app.preferences.$field)
+            .on_hover_text($app.tr($help))
     };
     (@control $app:ident, $ui:ident, $field:ident, check_id($label:literal)) => {
         ui_kit::checkbox($ui, $app.tr($label), &mut $app.preferences.$field)
@@ -1018,6 +1031,8 @@ preference_settings! {
     sketch_tab_always: bool = false, PAGE_INTERFACE => check_id("prefs.sketch_tab_always");
     /// Where a dialog's OK and Cancel sit: under its inputs (the default) or in its title row (#6708).
     dialog_buttons: crate::ui_kit::DialogButtons = Default::default(), PAGE_INTERFACE;
+    /// Apply changes in Preferences as they are made instead of on Apply or OK (the older behaviour).
+    live_apply: bool = false, PAGE_INTERFACE => check_id("prefs.live_apply", "prefs.live_apply_note");
     /// Where notices and offers stack: the view's bottom-right corner (the default) or the bottom
     /// centre, as before #7893.
     toast_place: crate::viewport::ToastPlace = Default::default(), PAGE_INTERFACE;
@@ -1310,6 +1325,15 @@ pub struct PrefsWindow {
     pub section: usize,
     /// Everything as it was when the dialog opened (or at the last Apply), for Cancel.
     snapshot: Option<Snapshot>,
+    /// What the pages are editing while the dialog is open: what Apply or OK will put in place.
+    /// Made with `snapshot` when the dialog opens and dropped with it when it closes.
+    draft: Option<Snapshot>,
+    /// Set while a page, or the control channel, is editing the draft: the app's values are the
+    /// draft's then, so a change needs no one-shot effect until the draft is applied.
+    draft_in_place: bool,
+    /// What the app holds, as the dialog last left it. A value that differs from it when the next
+    /// frame hands the draft out came from outside the dialog, and the draft takes it up ([`Snapshot::adopt`]).
+    installed: Option<Snapshot>,
     /// The up axis preference the view follows now (applied when it changes, and at startup).
     applied_up: Option<String>,
     /// The search text of the interface font list.
@@ -1446,37 +1470,9 @@ impl Snapshot {
             keys: app.keymap.custom.clone(),
         }
     }
-    fn restore(self, app: &mut SolveApp) {
-        let graphics = (app.preferences.msaa, app.preferences.window_system.clone(), app.preferences.graphics_adapter.clone());
-        let units_changed = app.preferences.default_units != self.prefs.default_units;
-        // Update bookkeeping isn't a setting: a check that finished while the dialog was open stays.
-        let update = std::mem::take(&mut app.preferences.update);
-        app.preferences = self.prefs;
-        app.preferences.update = update;
-        if units_changed {
-            default_units_changed(app);
-        }
-        app.ui.dark = self.dark;
-        app.ui.layout = self.layout;
-        app.ui.show_grid = self.grid;
-        app.ui.show_navigation_bar = self.navigation_bar;
-        app.ui.tool_cursor = self.tool_cursor;
-        app.ui.ground_shadow = self.shadow;
-        app.ui.perspective = self.perspective;
-        app.ui.visual_style = self.style;
-        app.ui.pick_bodies = self.pick_bodies;
-        app.ui.agent_cursor = self.agent;
-        app.autosave_minutes = self.autosave;
-        set_autosave(app);
-        app.session.auto_project = self.auto_project;
-        app.keymap.custom = self.keys;
-        if (app.preferences.msaa, app.preferences.window_system.clone(), app.preferences.graphics_adapter.clone()) != graphics {
-            save_graphics(app);
-        }
-    }
-
     /// Whether everything is as in the snapshot: nothing Cancel would put back. Destructured, so
-    /// a setting added to the snapshot can't be left out of the comparison.
+    /// a setting added to the snapshot can't be left out of the comparison. Read with the draft in
+    /// place, this is what Apply has to do (#8561): the draft's changes, not the app's.
     fn matches(&self, app: &SolveApp) -> bool {
         let Snapshot {
             prefs,
@@ -1509,6 +1505,141 @@ impl Snapshot {
             && *auto_project == app.session.auto_project
             && *keys == app.keymap.custom
     }
+    /// Take up what the app changed outside the dialog since these values last left it: a command,
+    /// the control channel or a file that set one keeps standing, and the draft follows it, so the
+    /// next install does not put the draft's older value back over it.
+    fn adopt(&mut self, app: &SolveApp, installed: &Snapshot) {
+        self.prefs.adopt_edits_outside(&app.preferences, &installed.prefs);
+        if app.ui.dark != installed.dark {
+            self.dark = app.ui.dark;
+        }
+        if app.ui.layout != installed.layout {
+            self.layout = app.ui.layout;
+        }
+        if app.ui.show_grid != installed.grid {
+            self.grid = app.ui.show_grid;
+        }
+        if app.ui.show_navigation_bar != installed.navigation_bar {
+            self.navigation_bar = app.ui.show_navigation_bar;
+        }
+        if app.ui.tool_cursor != installed.tool_cursor {
+            self.tool_cursor = app.ui.tool_cursor;
+        }
+        if app.ui.ground_shadow != installed.shadow {
+            self.shadow = app.ui.ground_shadow;
+        }
+        if app.ui.perspective != installed.perspective {
+            self.perspective = app.ui.perspective;
+        }
+        if app.ui.visual_style != installed.style {
+            self.style = app.ui.visual_style;
+        }
+        if app.ui.pick_bodies != installed.pick_bodies {
+            self.pick_bodies = app.ui.pick_bodies;
+        }
+        if app.ui.agent_cursor != installed.agent {
+            self.agent = app.ui.agent_cursor;
+        }
+        if app.autosave_minutes != installed.autosave {
+            self.autosave = app.autosave_minutes;
+        }
+        if app.session.auto_project != installed.auto_project {
+            self.auto_project = app.session.auto_project;
+        }
+        if app.keymap.custom != installed.keys {
+            self.keys = app.keymap.custom.clone();
+        }
+    }
+    /// Move these values out of the app, leaving the defaults behind, so a draft can go in and out
+    /// again without copying either. The update bookkeeping stays in the app: a check that finished
+    /// while the dialog was open is not a setting.
+    fn swap_out(app: &mut SolveApp) -> Snapshot {
+        let mut prefs = std::mem::take(&mut app.preferences);
+        std::mem::swap(&mut prefs.update, &mut app.preferences.update);
+        Snapshot {
+            prefs,
+            dark: std::mem::take(&mut app.ui.dark),
+            layout: std::mem::take(&mut app.ui.layout),
+            grid: std::mem::take(&mut app.ui.show_grid),
+            navigation_bar: std::mem::take(&mut app.ui.show_navigation_bar),
+            tool_cursor: std::mem::take(&mut app.ui.tool_cursor),
+            shadow: std::mem::take(&mut app.ui.ground_shadow),
+            perspective: std::mem::take(&mut app.ui.perspective),
+            style: std::mem::take(&mut app.ui.visual_style),
+            pick_bodies: std::mem::take(&mut app.ui.pick_bodies),
+            agent: std::mem::take(&mut app.ui.agent_cursor),
+            autosave: std::mem::take(&mut app.autosave_minutes),
+            auto_project: std::mem::take(&mut app.session.auto_project),
+            keys: std::mem::take(&mut app.keymap.custom),
+        }
+    }
+    /// Put these values into the app, silently: no one-shot effect runs (see [`Effects`]). The
+    /// pages are drawn with the draft in place, and the values it replaced go back the same way.
+    fn install(mut self, app: &mut SolveApp) {
+        // The app keeps the update bookkeeping it holds (the same exception as before).
+        std::mem::swap(&mut self.prefs.update, &mut app.preferences.update);
+        app.preferences = self.prefs;
+        app.ui.dark = self.dark;
+        app.ui.layout = self.layout;
+        app.ui.show_grid = self.grid;
+        app.ui.show_navigation_bar = self.navigation_bar;
+        app.ui.tool_cursor = self.tool_cursor;
+        app.ui.ground_shadow = self.shadow;
+        app.ui.perspective = self.perspective;
+        app.ui.visual_style = self.style;
+        app.ui.pick_bodies = self.pick_bodies;
+        app.ui.agent_cursor = self.agent;
+        app.autosave_minutes = self.autosave;
+        app.session.auto_project = self.auto_project;
+        app.keymap.custom = self.keys;
+    }
+    /// Put these values back and run the effects the change asks for: what Cancel does, and what
+    /// Apply does after it. The effects are measured against the app as it was.
+    fn restore(self, app: &mut SolveApp) {
+        let live = Snapshot::swap_out(app);
+        let effects = Effects::of(&live);
+        self.install(app);
+        effects.run(app);
+    }
+}
+
+/// The one-shot effects of a preference change: the units a blank design takes, the autosave
+/// interval, the graphics settings the next start reads, and the sketch auto-project flag. They act
+/// on the app or on disk, so a draft that is not applied yet must not run them.
+struct Effects {
+    default_units: String,
+    autosave: f64,
+    graphics: (u32, String, String),
+    auto_project: bool,
+}
+
+impl Effects {
+    /// What a set of values holds, to measure whatever the app holds after a change against.
+    fn of(values: &Snapshot) -> Effects {
+        Effects {
+            default_units: values.prefs.default_units.clone(),
+            autosave: values.autosave,
+            graphics: (values.prefs.msaa, values.prefs.window_system.clone(), values.prefs.graphics_adapter.clone()),
+            auto_project: values.auto_project,
+        }
+    }
+
+    /// Run what changed since [`Effects::of`].
+    fn run(self, app: &mut SolveApp) {
+        if app.preferences.default_units != self.default_units {
+            default_units_changed(app);
+        }
+        if app.autosave_minutes != self.autosave {
+            set_autosave(app);
+        }
+        if (app.preferences.msaa, app.preferences.window_system.clone(), app.preferences.graphics_adapter.clone()) != self.graphics {
+            save_graphics(app);
+        }
+        if app.session.auto_project != self.auto_project {
+            let value = app.session.auto_project;
+            let _ = app.run("sketch.auto_project", json!({"value": value}));
+        }
+    }
 }
 
 /// Whether Apply has anything to do (#8561): something changed since the dialog opened or since
@@ -1522,9 +1653,105 @@ fn apply_pending(app: &mut SolveApp) -> bool {
     app.prefs_window.snapshot.as_ref().is_some_and(|s| !s.matches(app))
 }
 
+/// Whether Apply has anything to do, read with the dialog's draft in place: while the dialog holds
+/// its edits in a draft (`live_apply` off) those edits are what Apply would put in place, so they
+/// are what its enabled state has to follow. Read from the app alone, every edit made in the dialog
+/// would leave Apply disabled, which is exactly what it must not be.
+fn apply_pending_with_draft(app: &mut SolveApp) -> bool {
+    editing(app, apply_pending)
+}
+
+/// Whether the dialog holds its edits in a draft instead of putting them in place as they are made:
+/// it is open and `live_apply` is off. The value read is the one in effect — what the dialog last
+/// applied (or the app's own, with no session yet), never a draft's — so turning `live_apply` on in
+/// the dialog changes the mode when it is applied, as any other setting does. Everything the dialog
+/// itself edits runs through [`editing`] while this is true.
+pub(crate) fn deferring(app: &SolveApp) -> bool {
+    app.prefs_window.open && !live_apply_in_effect(app)
+}
+
+/// The `live_apply` in effect: the dialog's basis while it holds a session, else the app's own.
+fn live_apply_in_effect(app: &SolveApp) -> bool {
+    app.prefs_window.snapshot.as_ref().map_or(app.preferences.live_apply, |basis| basis.prefs.live_apply)
+}
+
+/// Begin the dialog's session if it has none: the basis Cancel returns to, and the draft the pages
+/// edit. Both are made together, so one without the other cannot happen.
+fn open_session(app: &mut SolveApp) {
+    if app.prefs_window.snapshot.is_some() && app.prefs_window.draft.is_some() {
+        return;
+    }
+    let snapshot = Snapshot::take(app);
+    app.prefs_window.draft = Some(snapshot.clone());
+    app.prefs_window.installed = Some(snapshot.clone());
+    app.prefs_window.snapshot = Some(snapshot);
+}
+
+/// Run `f` with the dialog's draft in place: the pages, and the control channel, edit the draft. In
+/// deferred mode the app is left holding the values it had; with `live_apply` the edits stand and
+/// what they changed takes effect at once, the effects they ask for and all. Work outside the pages
+/// that writes a preference a picked file or a drop brought (a shortcut import, a theme) runs in
+/// here too, so the dialog's draft keeps it: Apply keeps it, Cancel discards it.
+pub(crate) fn editing<R>(app: &mut SolveApp, f: impl FnOnce(&mut SolveApp) -> R) -> R {
+    let Some(mut draft) = app.prefs_window.draft.take() else { return f(app) };
+    let deferred = deferring(app);
+    // A value the app changed outside the dialog since the draft was last out keeps standing: the
+    // draft takes it up before it goes in, so this frame cannot put the older value back over it.
+    if deferred
+        && !app.prefs_window.draft_in_place
+        && let Some(installed) = app.prefs_window.installed.as_ref()
+    {
+        draft.adopt(app, installed);
+    }
+    let live = Snapshot::swap_out(app);
+    draft.install(app);
+    let outer = std::mem::replace(&mut app.prefs_window.draft_in_place, true);
+    let result = f(app);
+    app.prefs_window.draft_in_place = outer;
+    let edited = Snapshot::swap_out(app);
+    if deferred {
+        // The dialog holds the frame's edits in its draft; the app keeps the values it had.
+        live.install(app);
+        app.prefs_window.draft = Some(edited);
+    } else {
+        // `live_apply`: the edits take effect now, as they did before there was a draft. The draft
+        // stays what the app holds, so the next frame hands it out again instead of taking the
+        // session for a new one and moving the basis Cancel returns to.
+        let effects = Effects::of(&live);
+        edited.install(app);
+        effects.run(app);
+        let held = Snapshot::take(app);
+        app.prefs_window.installed = Some(held.clone());
+        app.prefs_window.draft = Some(held);
+        return result;
+    }
+    // What the app holds now is what the next draft measures changes made outside the dialog against.
+    app.prefs_window.installed = Some(Snapshot::take(app));
+    result
+}
+
+/// Apply and OK: the draft takes effect, and what was applied becomes the basis Cancel returns to.
+fn commit(app: &mut SolveApp) {
+    if let Some(draft) = app.prefs_window.draft.take() {
+        let live = Snapshot::swap_out(app);
+        let effects = Effects::of(&live);
+        draft.install(app);
+        effects.run(app);
+    } else if !app.prefs_window.open {
+        // Nothing to apply, and no dialog to keep editing.
+        return;
+    }
+    // The dialog keeps editing, from what it just applied.
+    let applied = Snapshot::take(app);
+    app.prefs_window.installed = Some(applied.clone());
+    app.prefs_window.draft = Some(applied.clone());
+    app.prefs_window.snapshot = Some(applied);
+}
+
 /// The colour theme (#2255): Dark, Light, System, the built-in theme files and the imported
-/// ones, with Import…, Export… (the theme on now as a complete file, to start a new one from)
-/// and Remove (an imported theme). Like the other preferences, a choice applies at once.
+/// ones, with Import..., Export... (the theme on now as a complete file, to start a new one from)
+/// and Remove (an imported theme). Like the other preferences, a choice lands in the dialog's
+/// draft and takes effect on Apply or OK (as it is made with `live_apply`).
 fn theme_row(app: &mut SolveApp, ui: &mut egui::Ui) {
     let mut choices = theme_choices(app);
     // While a file is followed (#7573) it is the theme, so no tile shows as chosen.
@@ -1698,7 +1925,10 @@ fn follow_row(app: &mut SolveApp, ui: &mut egui::Ui) {
     if choose {
         app.pick_open_for(&["json"], |app, path| {
             let Some(path) = path else { return };
-            if let Err(e) = set_theme_follow(app, &serde_json::Value::String(path), FOLLOW_AVAILABLE) {
+            // The picker answers after the frame that asked, so the choice goes where the dialog
+            // holds its edits.
+            let error = editing(app, |app| set_theme_follow(app, &serde_json::Value::String(path), FOLLOW_AVAILABLE).err());
+            if let Some(e) = error {
                 app.set_status(format!("Follow a theme file: {e}"), true);
             }
         });
@@ -1706,7 +1936,8 @@ fn follow_row(app: &mut SolveApp, ui: &mut egui::Ui) {
 }
 
 /// The interface font (#1290): the built-in font first, then the installed families, with a
-/// search box. The choice applies at once, like the other preferences.
+/// search box. The choice lands in the dialog's draft, like the other preferences, and takes
+/// effect on Apply or OK (as it is made with `live_apply`).
 fn ui_font_row(app: &mut SolveApp, ui: &mut egui::Ui) {
     let builtin = app.tr_label("Built-in").to_string();
     let current = if app.preferences.ui_font.trim().is_empty() { builtin.clone() } else { app.preferences.ui_font.clone() };
@@ -1738,19 +1969,14 @@ fn ui_font_row(app: &mut SolveApp, ui: &mut egui::Ui) {
     }
 }
 
-/// Restore Defaults for one page.
+/// Restore Defaults for one page. The reset itself is always made where the caller points it — the
+/// dialog's draft, or the app's own values; the effects it asks for run from `commit` when the draft
+/// is applied, and right here when it is not.
 fn defaults(app: &mut SolveApp, page: usize) {
-    let (msaa, window_system, adapter) = (app.preferences.msaa, app.preferences.window_system.clone(), app.preferences.graphics_adapter.clone());
-    let units = app.preferences.default_units.clone();
+    let effects = Effects::of(&Snapshot::take(app));
     reset_preferences(&mut app.preferences, page);
-    if app.preferences.default_units != units {
-        default_units_changed(app);
-    }
     match page {
-        0 => {
-            app.autosave_minutes = 5.0;
-            set_autosave(app);
-        }
+        0 => app.autosave_minutes = 5.0,
         PAGE_INTERFACE => {
             app.prefs_window.follow.launch = None;
             app.ui.dark = true;
@@ -1766,15 +1992,15 @@ fn defaults(app: &mut SolveApp, page: usize) {
             app.ui.show_grid = true;
             app.ui.ground_shadow = true;
             app.ui.perspective = false;
-            if app.preferences.msaa != msaa || app.preferences.window_system != window_system || app.preferences.graphics_adapter != adapter {
-                save_graphics(app);
-            }
         }
         PAGE_SKETCH => {
             app.session.auto_project = true;
             app.ui.pick_bodies = false;
         }
         _ => {}
+    }
+    if !app.prefs_window.draft_in_place {
+        effects.run(app);
     }
 }
 
@@ -2118,15 +2344,22 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
         app.prefs_window.reveal = None;
         crate::prefs_search::set_reveal(ctx, None);
         app.prefs_window.snapshot = None;
+        app.prefs_window.draft = None;
+        app.prefs_window.installed = None;
         // A question left up when the dialog closed is not still asked when it opens again.
         app.space_mouse.restore_pending = false;
         // Calibration opens from here and ends with it, so the cap moves the view again.
         app.space_mouse.calibrating = None;
         return;
     }
-    if app.prefs_window.snapshot.is_none() {
+    if app.prefs_window.snapshot.is_none() || app.prefs_window.draft.is_none() {
         app.crashes.refresh();
-        app.prefs_window.snapshot = Some(Snapshot::take(app));
+    }
+    open_session(app);
+    let live = !deferring(app);
+    if live {
+        // `live_apply` is on: the app holds the values, and the draft is what this frame's pages edit.
+        app.prefs_window.draft = Some(Snapshot::take(app));
     }
     unfold(ctx);
     if let Some(reveal) = &app.prefs_window.reveal
@@ -2137,9 +2370,8 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
     let sink = crate::prefs_search::shift_key_sink(ctx);
     crate::prefs_search::set_key_sink_prev(ctx, sink);
     let mut button: Option<&str> = None;
-    let before = app.preferences.clone();
     let capturing = crate::keymap::capturing(app);
-    let pending = apply_pending(app);
+    let pending = apply_pending_with_draft(app);
     let window = ui_kit::Window::new(egui::Id::new("sc_prefs"), "settings", app.tr("ui.preferences"))
         .cards(10.0 / 3.0)
         .page_rows(24.0)
@@ -2154,23 +2386,28 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
         .apply_enabled(pending);
     let window = if capturing { window.keep_open_on_escape() } else { window };
     let mut selected = app.prefs_window.section;
-    let (closed, action) = window.show_pages_with_header(ctx, &mut selected, WINDOW_PAGES, app, search_header, clear_search, |ui| {
-        if ui_kit::button(ui, crate::i18n::tr("ui.restore_defaults"), ui_kit::Button::Normal)
-            .on_hover_text(crate::i18n::tr("ui.reset_the_settings_on_this_page"))
-            .clicked()
-        {
-            button = Some("defaults");
+    // The pages edit the draft, so the rest of the frame keeps seeing the values in effect.
+    let (closed, action) = editing(app, |app| {
+        let shown = window.show_pages_with_header(ctx, &mut selected, WINDOW_PAGES, app, search_header, clear_search, |ui| {
+            if ui_kit::button(ui, crate::i18n::tr("ui.restore_defaults"), ui_kit::Button::Normal)
+                .on_hover_text(crate::i18n::tr("ui.reset_the_settings_on_this_page"))
+                .clicked()
+            {
+                button = Some("defaults");
+            }
+        });
+        if let Some(rect) = crate::scenario::rect_of("dialog:page_body") {
+            crate::scenario::publish_rect("prefs:page_body", rect);
         }
+        for name in ["window", "footer", "ok", "apply", "cancel"] {
+            if let Some(rect) = crate::scenario::rect_of(&format!("dialog:{name}")) {
+                crate::scenario::publish_target(&format!("prefs:{name}"), rect);
+            }
+        }
+        // The calibration card is the dialog's too: what it records is a preference.
+        crate::space_mouse_calibration::show(app, ctx);
+        shown
     });
-    if let Some(rect) = crate::scenario::rect_of("dialog:page_body") {
-        crate::scenario::publish_rect("prefs:page_body", rect);
-    }
-    for name in ["window", "footer", "ok", "apply", "cancel"] {
-        if let Some(rect) = crate::scenario::rect_of(&format!("dialog:{name}")) {
-            crate::scenario::publish_target(&format!("prefs:{name}"), rect);
-        }
-    }
-    crate::space_mouse_calibration::show(app, ctx);
     if let Some(rect) = crate::scenario::rect_of("dialog:footer:actions") {
         crate::scenario::publish_rect("prefs:actions", rect);
     }
@@ -2180,35 +2417,35 @@ pub fn show(app: &mut SolveApp, ctx: &egui::Context) {
         ui_kit::Action::Cancel => Some("cancel"),
         ui_kit::Action::None => button,
     };
-    if app.preferences.msaa != before.msaa
-        || app.preferences.window_system != before.window_system
-        || app.preferences.graphics_adapter != before.graphics_adapter
-    {
-        save_graphics(app);
-    }
-    if app.preferences.up_axis != before.up_axis {
-        up_axis_changed(app);
-    }
     match button {
-        Some("defaults") => defaults(app, app.prefs_window.section),
-        Some("apply") => app.prefs_window.snapshot = Some(Snapshot::take(app)),
-        Some("ok") => close(app, false),
+        Some("defaults") => {
+            let page = app.prefs_window.section;
+            editing(app, |app| defaults(app, page));
+        }
+        Some("apply") => commit(app),
+        Some("ok") => {
+            commit(app);
+            close(app, false);
+        }
         Some("cancel") => close(app, true),
         _ if closed => close(app, true),
         _ => {}
     }
     // The footer was drawn before this frame's edits (and before an Apply): show Apply's new
     // state on the next frame rather than at the next input.
-    if app.prefs_window.open && apply_pending(app) != pending {
+    if app.prefs_window.open && apply_pending_with_draft(app) != pending {
         ctx.request_repaint();
     }
 }
 
-/// Close the dialog; `revert`: put back what was there when it opened (Cancel, Esc, ×).
+/// Close the dialog; `revert`: put back what was there when it opened (Cancel, Esc, ×). While the
+/// dialog defers, the app was never touched, so there the draft is simply dropped.
 pub(crate) fn close(app: &mut SolveApp, revert: bool) {
-    if let Some(s) = app.prefs_window.snapshot.take()
-        && revert
-    {
+    let revert = revert && !deferring(app);
+    let snapshot = app.prefs_window.snapshot.take();
+    app.prefs_window.draft = None;
+    app.prefs_window.installed = None;
+    if revert && let Some(s) = snapshot {
         let up = app.preferences.up_axis.clone();
         s.restore(app);
         if app.preferences.up_axis != up {
@@ -2830,45 +3067,53 @@ pub fn control(app: &mut SolveApp, p: &serde_json::Value) -> Result<serde_json::
         let i = page_index(name).ok_or_else(|| format!("no page `{name}` ({})", PAGES.join(", ")))?;
         open_at(app, i);
         app.prefs_window.navbar_scroll = name.eq_ignore_ascii_case("Interface/Navigation bar");
-        if app.prefs_window.snapshot.is_none() {
-            app.prefs_window.snapshot = Some(Snapshot::take(app));
-        }
-    }
-    match rest.remove("stand_up").and_then(|v| v.as_bool()) {
-        Some(true) => crate::stand_up::stand_up(app)?,
-        Some(false) => crate::stand_up::leave(app),
-        None => {}
-    }
-    let imported = match rest.remove("theme_import") {
-        Some(v) => Some(import_theme(app, &v)?),
-        None => None,
-    };
-    if let Some(id) = rest.remove("theme_remove") {
-        remove_theme(app, id.as_str().unwrap_or_default())?;
-    }
-    match rest.remove("theme_follow") {
-        Some(v) => set_theme_follow(app, &v, FOLLOW_AVAILABLE)?,
-        // Choosing a theme stops following a file, as clicking a theme tile does.
-        None if rest.contains_key("theme") => stop_following(app),
-        None => {}
+        open_session(app);
     }
     let export = rest.remove("theme_export").and_then(|v| v.as_bool()).unwrap_or(false);
-    let button = rest.remove("button");
-    let mut out = set(app, &serde_json::Value::Object(rest))?;
-    match button.as_ref().and_then(|b| b.as_str()) {
-        Some("ok") => close(app, false),
+    let button = rest.remove("button").and_then(|b| b.as_str().map(str::to_owned));
+    // Everything that reads or writes a preference edits the dialog's draft while it holds one, as
+    // the pages do; importing, exporting and following a file are themselves, not preferences.
+    let imported = editing(app, |app| {
+        match rest.remove("stand_up").and_then(|v| v.as_bool()) {
+            Some(true) => crate::stand_up::stand_up(app)?,
+            Some(false) => crate::stand_up::leave(app),
+            None => {}
+        }
+        let imported = match rest.remove("theme_import") {
+            Some(v) => Some(import_theme(app, &v)?),
+            None => None,
+        };
+        if let Some(id) = rest.remove("theme_remove") {
+            remove_theme(app, id.as_str().unwrap_or_default())?;
+        }
+        match rest.remove("theme_follow") {
+            Some(v) => set_theme_follow(app, &v, FOLLOW_AVAILABLE)?,
+            // Choosing a theme stops following a file, as clicking a theme tile does.
+            None if rest.contains_key("theme") => stop_following(app),
+            None => {}
+        }
+        set(app, &serde_json::Value::Object(rest))?;
+        Ok::<_, String>(imported)
+    })?;
+    match button.as_deref() {
+        Some("ok") => {
+            commit(app);
+            close(app, false);
+        }
         Some("cancel") => close(app, true),
-        Some("apply") => app.prefs_window.snapshot = Some(Snapshot::take(app)),
-        Some("defaults") => defaults(app, app.prefs_window.section),
+        Some("apply") => commit(app),
+        Some("defaults") => {
+            let page = app.prefs_window.section;
+            editing(app, |app| defaults(app, page));
+        }
         Some(b) => return Err(format!("unknown button `{b}` (ok, cancel, apply, defaults)")),
         None => {}
     }
-    if button.is_some() {
-        out = serde_json::to_value(&app.preferences).map_err(|e| e.to_string())?;
-    }
+    // The reply reports the preferences in effect, not the dialog's draft.
+    let mut out = serde_json::to_value(&app.preferences).map_err(|e| e.to_string())?;
     if let Some(o) = out.as_object_mut() {
         o.insert("dialog".into(), json!(app.prefs_window.open.then(|| PAGES.get(app.prefs_window.section).copied().unwrap_or_default())));
-        o.insert("apply_enabled".into(), json!(apply_pending(app)));
+        o.insert("apply_enabled".into(), json!(apply_pending_with_draft(app)));
         o.insert("stand_up_offer".into(), json!(app.stand_up));
         o.insert("stand_up_note".into(), json!(app.stand_up.is_some() && app.stand_up_note));
         o.insert("dark".into(), json!(app.ui.dark));
@@ -2961,17 +3206,18 @@ fn select_theme(app: &mut SolveApp, id: &str) {
     }
 }
 
-/// Import a theme file (its text, or its JSON) into the preferences and turn it on; returns
-/// the id it is kept under.
-/// Import a theme file's text, from a file, a paste or a drop, and say what happened in the status bar.
+/// Import a theme file's text, from a file, a paste or a drop, and say what happened in the status
+/// bar. A picker or a drop lands after the frame that asked for it, so the theme goes into the
+/// draft the dialog holds, as a choice made in the dialog would.
 fn import_theme_text(app: &mut SolveApp, text: Result<String, String>) {
-    match text.and_then(|text| import_theme(app, &serde_json::Value::String(text))) {
+    let (message, error) = editing(app, |app| match text.and_then(|text| import_theme(app, &serde_json::Value::String(text))) {
         Ok(id) => {
             let name = crate::theme_files::find(&id, &app.preferences.custom_themes).map(|t| t.name.clone()).unwrap_or(id);
-            app.set_status(format!("Theme imported: {name}"), false);
+            (format!("Theme imported: {name}"), false)
         }
-        Err(e) => app.set_status(format!("Theme import: {e}"), true),
-    }
+        Err(e) => (format!("Theme import: {e}"), true),
+    });
+    app.set_status(message, error);
 }
 
 /// Text that is meant as a theme file: a JSON object naming the theme format. Anything else
@@ -3040,6 +3286,8 @@ pub fn import_theme_bytes(app: &mut SolveApp, bytes: Vec<u8>) {
     import_theme_text(app, text);
 }
 
+/// Import a theme file (its text, or its JSON) into the preferences and turn it on; returns the id
+/// it is kept under.
 pub fn import_theme(app: &mut SolveApp, v: &serde_json::Value) -> Result<String, String> {
     let theme = match v {
         serde_json::Value::String(text) => crate::theme_files::parse(text)?,
@@ -3302,15 +3550,19 @@ pub fn set(app: &mut SolveApp, p: &serde_json::Value) -> Result<serde_json::Valu
         app.ui.layout = new.layout;
     }
     app.preferences = new;
-    apply_file_limits(&app.preferences);
-    if units_changed {
-        default_units_changed(app);
-    }
-    if graphics_changed {
-        save_graphics(app);
-    }
-    if up_changed {
-        up_axis_changed(app);
+    // Inside the dialog's draft the change waits for Apply or OK: the effects run from `commit`
+    // when it is applied. Applied to the app's own values, they run now, as they always did.
+    if !app.prefs_window.draft_in_place {
+        apply_file_limits(&app.preferences);
+        if units_changed {
+            default_units_changed(app);
+        }
+        if graphics_changed {
+            save_graphics(app);
+        }
+        if up_changed {
+            up_axis_changed(app);
+        }
     }
     serde_json::to_value(&app.preferences).map_err(|e| e.to_string())
 }
@@ -3421,7 +3673,8 @@ mod tests {
         h.call("ui.prefs", json!({"open":"Interface"}));
         let reply = h.call("ui.prefs", edit);
         assert_eq!(reply["ok"], true, "{reply}");
-        assert_eq!(reply["result"]["navigation_bar"]["slots"], json!(["zoom", "future", "display"]));
+        // The dialog holds the edit in its draft; the reply still reports what is in effect.
+        assert_eq!(reply["result"]["navigation_bar"], serde_json::to_value(NavigationBar::default()).unwrap(), "{reply}");
         let before = h.app.preferences.clone();
         for bad in [
             json!(null),
@@ -3436,14 +3689,20 @@ mod tests {
             assert!(super::control(&mut h.app, &json!({"navigation_bar":bad,"zoom_reverse":true})).is_err());
             assert_eq!(h.app.preferences, before, "failed updates are atomic");
         }
+        h.call("ui.prefs", json!({"button":"apply"}));
+        let applied = h.app.preferences.navigation_bar.clone();
+        assert_eq!(applied.slots, ["zoom", "future", "display"], "the slot that names nothing this build knows is kept, the duplicate is not");
         let mut restored = crate::SolveApp::new(Default::default(), Default::default());
         restored.load_prefs(&h.app.prefs());
-        assert_eq!(restored.preferences.navigation_bar, before.navigation_bar);
+        assert_eq!(restored.preferences.navigation_bar, applied);
         h.call("ui.prefs", json!({"button":"cancel"}));
-        assert_eq!(h.app.preferences.navigation_bar, NavigationBar::default());
+        assert_eq!(h.app.preferences.navigation_bar, applied, "Cancel puts back the last Apply");
         h.call("ui.prefs", json!({"open":"Interface","navigation_bar":{"slots":[]}}));
+        h.call("ui.prefs", json!({"button":"apply"}));
         assert!(h.app.preferences.navigation_bar.slots.is_empty());
         h.call("ui.prefs", json!({"button":"defaults"}));
+        assert!(h.app.preferences.navigation_bar.slots.is_empty(), "Restore Defaults changes nothing until Apply");
+        h.call("ui.prefs", json!({"button":"apply"}));
         assert_eq!(h.app.preferences.navigation_bar, NavigationBar::default());
     }
 
@@ -3453,6 +3712,12 @@ mod tests {
         scroll_to_and_click(h, handle);
     }
 
+    /// Apply what the dialog holds, so the app's own values can be read: Apply keeps the dialog
+    /// open, from what it just applied.
+    fn apply_prefs(h: &mut crate::scenario::Harness) {
+        h.call("ui.prefs", serde_json::json!({"button": "apply"}));
+    }
+
     #[test]
     fn navigation_bar_editor_buttons_and_appearance_update_preferences() {
         use crate::navigation_bar::{Idle, Labels, MenuDisplay, Position, Size};
@@ -3460,36 +3725,50 @@ mod tests {
         h.app.home.open = false;
         h.call("ui.resize", json!({"width":1600,"height":1100}));
         h.call("ui.prefs", json!({"open":"Interface/Navigation bar", "navigation_bar":{"slots":["pan","fit","visual_style","display"]}}));
+        // Each group of clicks lands in the dialog's draft: Apply is what puts it in the app.
         navbar_click(&mut h, "prefs:navbar:add:spin");
+        apply_prefs(&mut h);
         assert_eq!(h.app.preferences.navigation_bar.slots, ["pan", "fit", "visual_style", "display", "spin"]);
         navbar_click(&mut h, "prefs:navbar:slot:pan");
         navbar_click(&mut h, "prefs:navbar:right");
+        apply_prefs(&mut h);
         assert_eq!(h.app.preferences.navigation_bar.slots, ["fit", "pan", "visual_style", "display", "spin"]);
         navbar_click(&mut h, "prefs:navbar:remove");
+        apply_prefs(&mut h);
         assert_eq!(h.app.preferences.navigation_bar.slots, ["fit", "visual_style", "display", "spin"]);
         navbar_click(&mut h, "prefs:navbar:slot:visual_style");
         navbar_click(&mut h, "prefs:navbar:shows:0");
+        apply_prefs(&mut h);
         assert_eq!(h.app.preferences.navigation_bar.menu_display("visual_style"), MenuDisplay::IconAndValue);
         navbar_click(&mut h, "prefs:navbar:position:0");
+        apply_prefs(&mut h);
         assert_eq!(h.app.preferences.navigation_bar.position, Position::Left);
         navbar_click(&mut h, "prefs:navbar:position:2");
+        apply_prefs(&mut h);
         assert_eq!(h.app.preferences.navigation_bar.position, Position::Right);
         navbar_click(&mut h, "prefs:navbar:size:0");
+        apply_prefs(&mut h);
         assert_eq!(h.app.preferences.navigation_bar.size, Size::Compact);
         navbar_click(&mut h, "prefs:navbar:size:1");
+        apply_prefs(&mut h);
         assert_eq!(h.app.preferences.navigation_bar.size, Size::Regular);
         navbar_click(&mut h, "prefs:navbar:buttons:1");
+        apply_prefs(&mut h);
         assert_eq!(h.app.preferences.navigation_bar.labels, Labels::Labels);
         navbar_click(&mut h, "prefs:navbar:idle:0");
+        apply_prefs(&mut h);
         assert_eq!(h.app.preferences.navigation_bar.idle, Idle::Always);
         navbar_click(&mut h, "prefs:navbar:idle:2");
+        apply_prefs(&mut h);
         assert_eq!(h.app.preferences.navigation_bar.idle, Idle::Hide);
         let before = h.app.preferences.navigation_bar.clone();
         navbar_click(&mut h, "prefs:navbar:preview_as:1");
         assert_eq!(h.app.preferences.navigation_bar, before, "canvas preview is transient");
         navbar_click(&mut h, "prefs:navbar:show");
+        apply_prefs(&mut h);
         assert!(!h.app.ui.show_navigation_bar);
         navbar_click(&mut h, "prefs:navbar:show");
+        apply_prefs(&mut h);
         assert!(h.app.ui.show_navigation_bar);
     }
 
@@ -3686,6 +3965,7 @@ mod tests {
         h.call("ui.prefs", json!({"open":"Interface/Navigation bar","navigation_bar":{"slots":["pan","fit","display"]}}));
         for (index, position) in [(0, Position::Left), (1, Position::Centre), (2, Position::Right)] {
             navbar_click(&mut h, &format!("prefs:navbar:position:{index}"));
+            apply_prefs(&mut h);
             h.frames(3);
             let stage = crate::scenario::rect_of("prefs:navbar:stage").unwrap();
             let bar = crate::scenario::rect_of("prefs:navbar:bar").unwrap();
@@ -3710,18 +3990,22 @@ mod tests {
         let preview = crate::scenario::rect_of("prefs:navbar:preview").unwrap();
         h.step(&json!({"drag":[{"handle":"prefs:navbar:tile:spin"}, [preview.right()-8.0,preview.center().y]],"steps":12})).unwrap();
         h.frames(4);
+        apply_prefs(&mut h);
         assert_eq!(h.app.preferences.navigation_bar.slots, ["pan", "fit", "display", "spin"]);
         let pan = crate::scenario::rect_of("prefs:navbar:slot:pan").unwrap();
         h.step(&json!({"drag":[{"handle":"prefs:navbar:slot:spin"}, [pan.left()+1.0,pan.center().y]],"steps":12})).unwrap();
         h.frames(4);
+        apply_prefs(&mut h);
         assert_eq!(h.app.preferences.navigation_bar.slots, ["spin", "pan", "fit", "display"]);
         let preview = crate::scenario::rect_of("prefs:navbar:preview").unwrap();
         h.step(&json!({"drag":[{"handle":"prefs:navbar:slot:spin"}, [preview.center().x,preview.bottom()+80.0]],"steps":12})).unwrap();
         h.frames(4);
+        apply_prefs(&mut h);
         assert_eq!(h.app.preferences.navigation_bar.slots, ["pan", "fit", "display"]);
         // Empty stage space is off the bar too; it must remove rather than append a moved slot.
         h.step(&json!({"drag":[{"handle":"prefs:navbar:slot:pan"}, [preview.right()-4.0,preview.center().y]],"steps":12})).unwrap();
         h.frames(4);
+        apply_prefs(&mut h);
         assert_eq!(h.app.preferences.navigation_bar.slots, ["fit", "display"]);
     }
 
@@ -3732,16 +4016,21 @@ mod tests {
         h.app.home.open = false;
         let before = h.app.preferences.navigation_bar.clone();
         let options = json!({"slots":["visual_style","pan"],"slot_options":{"visual_style":{"shows":"icon_and_value"}},"size":"regular"});
-        h.call("ui.prefs", json!({"open":"Interface/Navigation bar","navigation_bar":options}));
+        // What the bar does is the app's; the dialog's own edits are what Cancel takes back.
         h.app.run("view.navigation_bar", json!({"visible":false})).unwrap();
+        h.call("ui.prefs", json!({"open":"Interface/Navigation bar","navigation_bar":options}));
+        navbar_click(&mut h, "prefs:navbar:show");
         h.call("ui.prefs", json!({"button":"cancel"}));
-        assert_eq!(h.app.preferences.navigation_bar, before);
-        assert!(h.app.ui.show_navigation_bar);
+        assert_eq!(h.app.preferences.navigation_bar, before, "Cancel drops the bar the draft was building");
+        assert!(!h.app.ui.show_navigation_bar, "the show toggle of the draft goes with it");
+        h.app.run("view.navigation_bar", json!({"visible":true})).unwrap();
         h.call("ui.prefs", json!({"open":"Interface/Navigation bar","navigation_bar":options}));
         h.call("ui.prefs", json!({"button":"defaults"}));
+        apply_prefs(&mut h);
         assert_eq!(h.app.preferences.navigation_bar, NavigationBar::default());
         h.call("ui.prefs", json!({"navigation_bar":options}));
         navbar_click(&mut h, "prefs:navbar:reset");
+        apply_prefs(&mut h);
         assert_eq!(h.app.preferences.navigation_bar, NavigationBar::default());
         navbar_click(&mut h, "dialog:section:Navigation bar");
         assert!(crate::scenario::handle_at("prefs:navbar:slot:pan").is_none(), "the section collapsed");
@@ -3884,11 +4173,15 @@ mod tests {
             assert_eq!(app.session.is_dirty(), dirty, "{design}");
             assert_eq!(app.session.undo.len(), undo, "{design}");
             if design == "new" {
-                super::control(&mut app, &serde_json::json!({"open": "Design"})).unwrap();
-                super::set(&mut app, &serde_json::json!({"default_units": "ft"})).unwrap();
-                assert_eq!(app.session.doc.units, "ft");
+                // The dialog holds the choice in its draft: the blank design takes it on Apply.
+                super::control(&mut app, &serde_json::json!({"open": "Design", "default_units": "ft"})).unwrap();
+                assert_eq!(app.session.doc.units, "in", "a draft is not applied");
                 super::control(&mut app, &serde_json::json!({"button": "cancel"})).unwrap();
-                assert_eq!(app.session.doc.units, "in");
+                assert_eq!(app.session.doc.units, "in", "Cancel discards it");
+                super::control(&mut app, &serde_json::json!({"open": "Design", "default_units": "ft"})).unwrap();
+                super::control(&mut app, &serde_json::json!({"button": "apply"})).unwrap();
+                assert_eq!(app.session.doc.units, "ft");
+                super::control(&mut app, &serde_json::json!({"button": "ok"})).unwrap();
                 super::defaults(&mut app, super::PAGE_DESIGN);
                 assert_eq!(app.session.doc.units, "mm");
                 assert!(!app.session.is_dirty());
@@ -4156,6 +4449,8 @@ mod tests {
         scroll_to_and_click(&mut h, "dialog:button::Restore defaults");
         scroll_to_and_click(&mut h, "dialog:button::Restore defaults");
         assert!(!h.app.space_mouse.restore_pending);
+        // The section's restore lands in the dialog's draft, like every other edit made there.
+        apply_prefs(&mut h);
         let d = Prefs::default();
         let restored = |h: &crate::scenario::Harness| {
             let p = &h.app.preferences;
@@ -4205,6 +4500,7 @@ mod tests {
         assert!(!section_is_at_defaults(&h.app));
         scroll_to_and_click(&mut h, "dialog:button::Restore defaults");
         scroll_to_and_click(&mut h, "dialog:button::Restore defaults");
+        apply_prefs(&mut h);
         assert!(!h.app.space_mouse.restore_pending && section_is_at_defaults(&h.app));
         let saved = h.app.prefs();
         let mut next = crate::scenario::Harness::new();
@@ -4547,6 +4843,7 @@ mod tests {
         );
         h.call("ui.prefs", serde_json::json!({"button": "defaults"}));
         h.frames(3);
+        apply_prefs(&mut h);
         assert!(h.app.preferences.space_mouse_speed == Prefs::default().space_mouse_speed, "the page was reset");
         assert_eq!(h.app.preferences.space_mouse_offered, offered);
         assert_eq!(h.app.preferences.space_mouse_calibrations, calibrations);
@@ -4781,6 +5078,7 @@ mod tests {
             ("viewport_background", json!([255, 255, 255]), PAGE_INTERFACE),
             ("view_confirm_corner", json!(true), PAGE_INTERFACE),
             ("status_bar", json!(true), PAGE_INTERFACE),
+            ("live_apply", json!(true), PAGE_INTERFACE),
             ("nav", json!("blender"), PAGE_NAVIGATION),
             ("look_at_anim", json!(false), PAGE_NAVIGATION),
             ("selection_shift_add_only", json!(true), PAGE_SKETCH),
@@ -4935,9 +5233,11 @@ mod tests {
         h.call("ui.prefs", json!({"open": "Interface"}));
         reveal_preference(&mut h, "dialog:Bodies folders:Always");
         h.step(&json!({"click": {"handle": "dialog:Bodies folders:Always"}})).unwrap();
+        assert_eq!(h.app.preferences.browser_bodies_folders, BodiesFolders::Never, "the click lands in the dialog's draft");
+        h.call("ui.prefs", json!({"button": "apply"}));
         assert_eq!(h.app.preferences.browser_bodies_folders, BodiesFolders::Always);
         h.call("ui.prefs", json!({"button": "cancel"}));
-        assert_eq!(h.app.preferences.browser_bodies_folders, BodiesFolders::Never, "Cancel puts it back");
+        assert_eq!(h.app.preferences.browser_bodies_folders, BodiesFolders::Always, "Cancel goes back to the last Apply");
         defaults(&mut h.app, PAGE_INTERFACE);
         assert_eq!(h.app.preferences.browser_bodies_folders, BodiesFolders::Several, "Interface's Restore Defaults");
     }
@@ -5055,13 +5355,19 @@ mod tests {
         h.frame_with(vec![egui::Event::Paste("just some words".into())]);
         assert_eq!(h.app.preferences.custom_themes, before.custom_themes);
 
-        // A theme's text imports and turns on, as Import… does with a file.
+        // A theme's text imports and turns on in the dialog's draft, as Import... does with a file.
         h.frame_with(vec![egui::Event::Paste(theme("Pasted"))]);
+        h.frames(2);
+        assert!(crate::scenario::handle_at("prefs:theme_tile:pasted").is_some(), "the imported theme shows in the rail");
+        assert_eq!(h.app.preferences.theme, "dark", "and the dialog holds the choice in its draft");
+        apply_prefs(&mut h);
         assert!(has(&h, "pasted"), "{:?}", h.app.preferences.custom_themes.iter().map(|t| &t.id).collect::<Vec<_>>());
         assert_eq!(h.app.preferences.theme, "pasted");
 
         // An invalid theme says why, and imports nothing.
         h.frame_with(vec![egui::Event::Paste(r#"{"format":"solidcraft-theme/1","name":"Bad","base":"sideways"}"#.into())]);
+        h.frames(2);
+        assert!(crate::scenario::handle_at("prefs:theme_tile:bad").is_none(), "nothing was added to the rail");
         assert!(!has(&h, "bad"));
 
         // A file dropped on the Import tile is a theme to import, not a design to open.
@@ -5085,6 +5391,8 @@ mod tests {
         h.frame_with(vec![egui::Event::PointerMoved(tile.center())]);
         h.drop_files(tile.center(), vec![std::sync::Arc::new(File(file)) as egui::DroppedFileHandle]);
         h.frames(2);
+        assert!(crate::scenario::handle_at("prefs:theme_tile:dropped").is_some(), "the dropped theme is in the dialog's draft");
+        apply_prefs(&mut h);
         assert!(has(&h, "dropped"));
         assert_eq!(h.app.docs.count(), tabs, "the drop opened no design");
         let _ = std::fs::remove_dir_all(&dir);
@@ -5115,6 +5423,7 @@ mod tests {
             let status = h.app.status.clone().map(|(text, ..)| text);
             if inside {
                 assert_eq!(status.as_deref(), Some("Theme imported: Paper"));
+                apply_prefs(&mut h);
                 assert_eq!(h.app.preferences.theme, "paper");
             } else {
                 assert!(status.as_deref().is_some_and(|s| s.contains("outside the folders this agent may use")), "{status:?}");
@@ -5525,6 +5834,12 @@ mod tests {
         super::reveal_preference(&mut h, "prefs:max_step_file_mb");
         assert!(crate::scenario::rect_of("prefs:max_design_file_mb").is_some());
         h.call("ui.prefs", json!({"button": "defaults"}));
+        assert_eq!(
+            super::file_limits(&h.app.preferences),
+            FileLimits { step: 4 * GB, design: 2 * GB },
+            "Restore Defaults changes nothing until Apply"
+        );
+        h.call("ui.prefs", json!({"button": "apply"}));
         assert_eq!(super::file_limits(&h.app.preferences), FileLimits::DEFAULT);
         h.call("ui.prefs", json!({"button": "cancel"}));
     }
@@ -5541,9 +5856,11 @@ mod tests {
         assert!(h.app.preferences.graphics_adapter.is_empty());
         h.step(&json!({"click":{"handle":"prefs:graphics_card"}})).unwrap();
         h.step(&json!({"click":{"handle":"dialog:list:graphics_card:0"}})).unwrap();
+        h.call("ui.prefs", json!({"button":"apply"}));
         assert_eq!(h.app.preferences.graphics_adapter, "Discrete small");
         h.step(&json!({"click":{"handle":"prefs:graphics_card"}})).unwrap();
         h.step(&json!({"click":{"handle":"dialog:list:graphics_card:auto"}})).unwrap();
+        h.call("ui.prefs", json!({"button":"apply"}));
         assert!(h.app.preferences.graphics_adapter.is_empty());
         std::fs::remove_dir_all(dir).unwrap();
     }
@@ -5696,31 +6013,41 @@ mod tests {
         let cube = crate::scenario::rect_of("prefs:navigator:Cube").unwrap().center();
         assert!(crate::scenario::rect_of("prefs:navigator:Signed axes").is_some());
         h.call("ui.click", json!({"x":cube.x,"y":cube.y}));
-        assert_eq!(h.app.preferences.navigator_style, NavigatorStyle::Cube);
-        assert!(crate::scenario::handle_at("navigation_cube:front").is_some());
+        assert_eq!(h.app.preferences.navigator_style, NavigatorStyle::Axes, "the choice waits in the dialog's draft");
         assert_eq!(h.app.preferences.nav, nav);
         assert_eq!(h.app.cam, camera);
         assert_eq!(h.app.session.doc.to_json(), design);
+        h.call("ui.prefs", json!({"button":"apply"}));
+        assert_eq!(h.app.preferences.navigator_style, NavigatorStyle::Cube);
+        h.frames(2);
+        assert!(crate::scenario::handle_at("navigation_cube:front").is_some(), "the view follows an applied choice");
         let mut restored = SolveApp::new(solidcraft_engine::Session::default(), Default::default());
         restored.load_prefs(&h.app.prefs());
         assert_eq!(restored.preferences.navigator_style, NavigatorStyle::Cube);
         let before = h.app.preferences.clone();
         assert!(control(&mut h.app, &json!({"navigator_style":"unknown", "nav":"solidworks"})).is_err());
         assert_eq!(h.app.preferences, before, "invalid settings must fail atomically");
+        h.call("ui.prefs", json!({"navigator_style":"axes"}));
         h.call("ui.prefs", json!({"button":"cancel"}));
-        assert_eq!(h.app.preferences.navigator_style, NavigatorStyle::Axes);
-        assert!(crate::scenario::handle_at("navigation_cube:front").is_none());
-        h.call("ui.prefs", json!({"open":"Navigation","navigator_style":"cube"}));
-        h.call("ui.prefs", json!({"button":"apply"}));
+        assert_eq!(h.app.preferences.navigator_style, NavigatorStyle::Cube, "Cancel drops the draft's axes");
+        h.call("ui.prefs", json!({"open":"Navigation","navigator_style":"cube","button":"apply"}));
         h.call("ui.prefs", json!({"button":"defaults"}));
+        assert_eq!(h.app.preferences.navigator_style, NavigatorStyle::Cube, "Restore Defaults changes nothing until Apply");
+        h.call("ui.prefs", json!({"button":"apply"}));
         assert_eq!(h.app.preferences.navigator_style, NavigatorStyle::Axes);
         h.call("ui.prefs", json!({"button":"cancel"}));
-        assert_eq!(h.app.preferences.navigator_style, NavigatorStyle::Cube);
-        h.call("ui.prefs", json!({"navigator_style":"axes", "look_at_anim":false}));
+        assert_eq!(h.app.preferences.navigator_style, NavigatorStyle::Axes, "Cancel goes back to the last Apply");
+        h.call("ui.prefs", json!({"look_at_anim":false}));
         h.call("ui.view", json!({"view":"front"}));
+        h.frames(2);
         let axis = crate::scenario::handle_at("axis_view:-y").unwrap();
         h.call("ui.click", json!({"x":axis.x,"y":axis.y}));
-        assert!(h.app.cam.back().dist(Vec3::Y) < 1e-6, "original axes retain click-again reversal");
+        // The axis end named after Y looks along it, whichever way the camera lands.
+        assert!(
+            h.app.cam.back().dist(Vec3::Y).min(h.app.cam.back().dist(-Vec3::Y)) < 1e-6,
+            "the original axes navigator still takes its own end: {:?}",
+            h.app.cam.back()
+        );
         assert_eq!(h.app.session.doc.to_json(), design);
     }
 
@@ -5798,6 +6125,7 @@ mod tests {
         h.call("ui.prefs", json!({"open":"Interface"}));
         super::reveal_preference(&mut h, "prefs:origin_plane_names:top_front_right");
         h.step(&json!({"click":{"handle":"prefs:origin_plane_names:top_front_right"}})).unwrap();
+        apply_prefs(&mut h);
         assert_eq!(h.app.preferences.origin_plane_names, TopFrontRight);
         h.call("ui.prefs", json!({"button":"ok"}));
         h.frames(2);
@@ -5835,11 +6163,13 @@ mod tests {
         assert_eq!(h.app.preferences.origin_plane_names, TopFrontRight, "Cancel takes it back");
         h.call("ui.prefs", json!({"open":"Interface"}));
         h.call("ui.prefs", json!({"button":"defaults"}));
+        assert_eq!(h.app.preferences.origin_plane_names, TopFrontRight, "Restore Defaults changes nothing until Apply");
+        apply_prefs(&mut h);
         assert_eq!(h.app.preferences.origin_plane_names, Xyz, "Restore Defaults: XY, XZ and YZ");
         h.frames(2);
         assert!(OriginPlaneNames::PLANES.iter().all(|p| rows().iter().any(|r| r == p)), "{:?}", rows());
         h.call("ui.prefs", json!({"button":"cancel"}));
-        assert_eq!(h.app.preferences.origin_plane_names, TopFrontRight);
+        assert_eq!(h.app.preferences.origin_plane_names, Xyz, "Cancel goes back to the last Apply");
     }
 
     /// The snap-suppress choice and Direct interaction read in the user's language: the classic
@@ -5873,10 +6203,13 @@ mod tests {
         super::reveal_preference(&mut h, &handle);
         let at = crate::scenario::handle_at(&handle).unwrap();
         h.call("ui.click", json!({"x": at.x, "y": at.y}));
-        assert_eq!(h.app.preferences.history_sketches, HistorySketches::UnderFeature);
+        assert_eq!(h.app.preferences.history_sketches, HistorySketches::InOrder, "the click lands in the dialog's draft");
+        assert_eq!(h.app.session.doc.to_json(), design, "the preference changes only the History");
+        h.call("ui.prefs", json!({"button": "apply"}));
+        assert_eq!(h.app.preferences.history_sketches, HistorySketches::UnderFeature, "Apply takes the row's choice");
         assert_eq!(h.app.session.doc.to_json(), design, "the preference changes only the History");
         h.call("ui.prefs", json!({"button": "cancel"}));
-        assert_eq!(h.app.preferences.history_sketches, HistorySketches::InOrder);
+        assert_eq!(h.app.preferences.history_sketches, HistorySketches::UnderFeature, "Cancel goes back to the last Apply");
 
         let reply = h.call("ui.prefs", json!({"history_sketches": "under_feature"}));
         assert_eq!(reply["result"]["history_sketches"], "under_feature");
@@ -5888,9 +6221,11 @@ mod tests {
         assert_eq!(h.app.preferences, before, "an unknown value changes nothing");
         h.call("ui.prefs", json!({"open": "Interface"}));
         h.call("ui.prefs", json!({"button": "defaults"}));
-        assert_eq!(h.app.preferences.history_sketches, HistorySketches::InOrder);
+        assert_eq!(h.app.preferences.history_sketches, HistorySketches::UnderFeature, "Restore Defaults changes nothing until Apply");
+        h.call("ui.prefs", json!({"button": "apply"}));
+        assert_eq!(h.app.preferences.history_sketches, HistorySketches::InOrder, "Interface's Restore Defaults puts the list back in creation order");
         h.call("ui.prefs", json!({"button": "cancel"}));
-        assert_eq!(h.app.preferences.history_sketches, HistorySketches::UnderFeature);
+        assert_eq!(h.app.preferences.history_sketches, HistorySketches::InOrder, "Cancel goes back to the last Apply");
     }
 
     #[test]
@@ -5903,9 +6238,11 @@ mod tests {
         h.call("ui.prefs", json!({"open": "Interface"}));
         super::reveal_preference(&mut h, "prefs:dialog_buttons:top");
         h.step(&json!({"click": {"handle": "prefs:dialog_buttons:top"}})).unwrap();
+        assert_eq!(h.app.preferences.dialog_buttons, DialogButtons::Bottom, "the click lands in the dialog's draft");
+        h.call("ui.prefs", json!({"button": "apply"}));
         assert_eq!(h.app.preferences.dialog_buttons, DialogButtons::Top);
         h.call("ui.prefs", json!({"button": "cancel"}));
-        assert_eq!(h.app.preferences.dialog_buttons, DialogButtons::Bottom);
+        assert_eq!(h.app.preferences.dialog_buttons, DialogButtons::Top, "Cancel goes back to the last Apply");
 
         let reply = h.call("ui.prefs", json!({"dialog_buttons": "top"}));
         assert_eq!(reply["result"]["dialog_buttons"], "top");
@@ -5917,9 +6254,11 @@ mod tests {
         assert_eq!(h.app.preferences, before, "an unknown value changes nothing");
         h.call("ui.prefs", json!({"open": "Interface"}));
         h.call("ui.prefs", json!({"button": "defaults"}));
+        assert_eq!(h.app.preferences.dialog_buttons, DialogButtons::Top, "Restore Defaults changes nothing until Apply");
+        h.call("ui.prefs", json!({"button": "apply"}));
         assert_eq!(h.app.preferences.dialog_buttons, DialogButtons::Bottom);
         h.call("ui.prefs", json!({"button": "cancel"}));
-        assert_eq!(h.app.preferences.dialog_buttons, DialogButtons::Top);
+        assert_eq!(h.app.preferences.dialog_buttons, DialogButtons::Bottom, "Cancel goes back to the last Apply");
     }
 
     #[test]
@@ -5929,17 +6268,21 @@ mod tests {
         let mut h = crate::scenario::Harness::new();
         h.call("ui.prefs", json!({"open":"Navigation"}));
         h.step(&json!({"click":{"handle":"prefs:free_orbit"}})).unwrap();
+        assert!(!h.app.preferences.free_orbit, "the click lands in the dialog's draft");
+        h.call("ui.prefs", json!({"button":"apply"}));
         assert!(h.app.preferences.free_orbit);
         let mut restored = SolveApp::new(solidcraft_engine::Session::default(), Default::default());
         restored.load_prefs(&h.app.prefs());
         assert!(restored.preferences.free_orbit);
         h.call("ui.prefs", json!({"button":"cancel"}));
-        assert!(!h.app.preferences.free_orbit);
+        assert!(h.app.preferences.free_orbit, "Cancel goes back to the last Apply");
         h.call("ui.prefs", json!({"open":"Navigation","free_orbit":true,"button":"apply"}));
         h.call("ui.prefs", json!({"button":"defaults"}));
-        assert!(!h.app.preferences.free_orbit);
+        assert!(h.app.preferences.free_orbit, "Restore Defaults changes nothing until Apply");
+        h.call("ui.prefs", json!({"button":"apply"}));
+        assert!(!h.app.preferences.free_orbit, "the Navigation page's defaults put it back off");
         h.call("ui.prefs", json!({"button":"cancel"}));
-        assert!(h.app.preferences.free_orbit);
+        assert!(!h.app.preferences.free_orbit, "Cancel goes back to the last Apply");
     }
 
     #[test]
@@ -5958,18 +6301,21 @@ mod tests {
             h.frames(20);
         }
         h.step(&json!({"widget":"Radial context menu"})).unwrap();
+        assert!(!h.app.preferences.radial_context_menu, "the checkbox lands in the dialog's draft");
+        h.call("ui.prefs", json!({"button":"apply"}));
         assert!(h.app.preferences.radial_context_menu, "the actual checkbox enables radial menus");
         let mut restored = SolveApp::new(solidcraft_engine::Session::default(), Default::default());
         restored.load_prefs(&h.app.prefs());
         assert!(restored.preferences.radial_context_menu, "enabled preference survives save/load");
         h.call("ui.prefs", json!({"button":"cancel"}));
-        assert!(!h.app.preferences.radial_context_menu, "Cancel restores the default-off setting");
-        h.call("ui.prefs", json!({"open":"Navigation","radial_context_menu":true}));
-        h.call("ui.prefs", json!({"button":"apply"}));
+        assert!(h.app.preferences.radial_context_menu, "Cancel goes back to the last Apply");
+        h.call("ui.prefs", json!({"open":"Navigation","radial_context_menu":true,"button":"apply"}));
         h.call("ui.prefs", json!({"button":"defaults"}));
+        assert!(h.app.preferences.radial_context_menu, "Restore Defaults changes nothing until Apply");
+        h.call("ui.prefs", json!({"button":"apply"}));
         assert!(!h.app.preferences.radial_context_menu, "Navigation defaults disable the ring");
         h.call("ui.prefs", json!({"button":"cancel"}));
-        assert!(h.app.preferences.radial_context_menu, "Cancel restores the last Apply");
+        assert!(!h.app.preferences.radial_context_menu);
     }
 
     #[test]
@@ -5985,17 +6331,21 @@ mod tests {
         super::reveal_preference(&mut h, "prefs:cosmetic_threads");
         let checkbox = crate::scenario::handle_at("prefs:cosmetic_threads").unwrap();
         h.call("ui.click", json!({"x":checkbox.x,"y":checkbox.y}));
+        assert!(!h.app.preferences.cosmetic_threads, "the checkbox lands in the dialog's draft");
+        h.call("ui.prefs", json!({"button":"apply"}));
         assert!(h.app.preferences.cosmetic_threads, "the actual checkbox enables the optional markings");
         let mut restored = SolveApp::new(solidcraft_engine::Session::default(), Default::default());
         restored.load_prefs(&h.app.prefs());
         assert!(restored.preferences.cosmetic_threads, "the preference survives saved application settings");
         h.call("ui.prefs", json!({"button":"cancel"}));
-        assert!(!h.app.preferences.cosmetic_threads);
+        assert!(h.app.preferences.cosmetic_threads, "Cancel goes back to the last Apply");
         h.call("ui.prefs", json!({"open":"Graphics","cosmetic_threads":true,"button":"apply"}));
         h.call("ui.prefs", json!({"button":"defaults"}));
+        assert!(h.app.preferences.cosmetic_threads, "Restore Defaults changes nothing until Apply");
+        h.call("ui.prefs", json!({"button":"apply"}));
         assert!(!h.app.preferences.cosmetic_threads, "Graphics defaults restore the default-off policy");
         h.call("ui.prefs", json!({"button":"cancel"}));
-        assert!(h.app.preferences.cosmetic_threads, "Cancel restores the last Apply");
+        assert!(!h.app.preferences.cosmetic_threads);
         h.call("ui.prefs", json!({"cosmetic_threads":false}));
         restored.load_prefs(&h.app.prefs());
         assert!(!restored.preferences.cosmetic_threads, "an explicitly disabled value also survives reload");
@@ -6037,11 +6387,16 @@ mod tests {
         assert!(!other.preferences.manipulator_free_alt);
         assert!(other.preferences.selection_shift_add_only);
         control(&mut app, &json!({"open": "Sketch", "button": "defaults"})).unwrap();
+        assert_eq!(app.preferences.suppress_sketch_snap, ModifierCombo::CTRL, "Restore Defaults changes nothing until Apply");
+        control(&mut app, &json!({"button": "cancel"})).unwrap();
+        assert_eq!(app.preferences.suppress_sketch_snap, ModifierCombo::CTRL, "Cancel discards the page's defaults");
+        control(&mut app, &json!({"button": "defaults"})).unwrap();
+        control(&mut app, &json!({"button": "apply"})).unwrap();
         assert_eq!(app.preferences.suppress_sketch_snap, ModifierCombo::CTRL_ALT);
         assert!(app.preferences.manipulator_free_alt);
         assert!(!app.preferences.selection_shift_add_only, "the merged Sketch & selection page resets both sets of modifiers");
         control(&mut app, &json!({"button": "cancel"})).unwrap();
-        assert_eq!(app.preferences.suppress_sketch_snap, ModifierCombo::CTRL);
+        assert_eq!(app.preferences.suppress_sketch_snap, ModifierCombo::CTRL_ALT, "Cancel goes back to the last Apply");
     }
 
     #[test]
@@ -6059,27 +6414,33 @@ mod tests {
         other.load_prefs(&app.prefs());
         assert!(!other.preferences.smooth_wheel_zoom);
         control(&mut app, &json!({"open":"Navigation", "button":"defaults"})).unwrap();
-        assert!(app.preferences.smooth_wheel_zoom);
+        assert!(!app.preferences.smooth_wheel_zoom, "Restore Defaults changes nothing until Apply");
+        control(&mut app, &json!({"button":"apply"})).unwrap();
+        assert!(app.preferences.smooth_wheel_zoom, "the Navigation page's defaults put it back on");
         control(&mut app, &json!({"button":"cancel"})).unwrap();
-        assert!(!app.preferences.smooth_wheel_zoom);
+        assert!(app.preferences.smooth_wheel_zoom, "Cancel goes back to the last Apply");
     }
 
     #[test]
     fn touchpad_preset_persists_and_obeys_preference_transactions() {
         let mut app = SolveApp::new(solidcraft_engine::Session::default(), Default::default());
         control(&mut app, &json!({"open":"Navigation", "nav":"touchpad"})).unwrap();
-        assert_eq!(app.preferences.nav, "touchpad");
+        assert_eq!(app.preferences.nav, "fusion", "the choice waits in the dialog's draft");
         assert!(app.preferences.trackpad_pan, "choosing Touchpad must not overwrite the saved scroll preference");
         control(&mut app, &json!({"button":"cancel"})).unwrap();
-        assert_eq!(app.preferences.nav, "fusion");
+        assert_eq!(app.preferences.nav, "fusion", "Cancel discards it");
         control(&mut app, &json!({"open":"Navigation", "nav":"touchpad", "button":"apply"})).unwrap();
+        assert_eq!(app.preferences.nav, "touchpad");
+        assert!(app.preferences.trackpad_pan, "choosing Touchpad must not overwrite the saved scroll preference");
         let mut other = SolveApp::new(solidcraft_engine::Session::default(), Default::default());
         other.load_prefs(&app.prefs());
         assert_eq!(other.preferences.nav, "touchpad");
         control(&mut app, &json!({"button":"defaults"})).unwrap();
+        assert_eq!(app.preferences.nav, "touchpad", "Restore Defaults changes nothing until Apply");
+        control(&mut app, &json!({"button":"apply"})).unwrap();
         assert_eq!(app.preferences.nav, "fusion");
         control(&mut app, &json!({"button":"cancel"})).unwrap();
-        assert_eq!(app.preferences.nav, "touchpad");
+        assert_eq!(app.preferences.nav, "fusion", "Cancel goes back to the last Apply");
     }
 
     #[test]
@@ -6175,9 +6536,11 @@ mod tests {
         other.load_prefs(&app.prefs());
         assert!(!other.preferences.trackpad_pan);
         control(&mut app, &json!({"open":"Navigation", "button":"defaults"})).unwrap();
-        assert!(app.preferences.trackpad_pan);
+        assert!(!app.preferences.trackpad_pan, "Restore Defaults changes nothing until Apply");
+        control(&mut app, &json!({"button":"apply"})).unwrap();
+        assert!(app.preferences.trackpad_pan, "the Navigation page's defaults put it back on");
         control(&mut app, &json!({"button":"cancel"})).unwrap();
-        assert!(!app.preferences.trackpad_pan);
+        assert!(app.preferences.trackpad_pan, "Cancel goes back to the last Apply");
     }
 
     #[test]
@@ -6266,24 +6629,30 @@ mod tests {
         assert_eq!(other.preferences.nav, "hfss");
     }
 
-    /// The dialog: changes apply at once, Cancel puts back what was there when it opened, Apply
-    /// keeps them, Restore Defaults resets one page, and the shortcuts menus open its page.
+    /// The dialog: its edits are held in a draft, Apply and OK put the draft in place, Cancel, Esc
+    /// and × discard it (as `live_apply` did not), Restore Defaults resets one page's draft, and the
+    /// shortcuts menus open its page.
     #[test]
     fn preferences_dialog_cancel_apply_and_defaults() {
         let mut app = SolveApp::new(solidcraft_engine::Session::default(), Default::default());
         control(&mut app, &json!({"open": "general"})).unwrap();
         assert!(app.prefs_window.open && app.prefs_window.section == 0);
         control(&mut app, &json!({"theme": "light", "ui_scale": 1.25, "zoom_to_cursor": false})).unwrap();
-        assert!(!app.ui.dark, "light applies at once");
-        app.keymap.custom.insert("solid.extrude".into(), vec!["Shift+E".into()]);
+        assert!(app.ui.dark && app.preferences.theme == "dark" && app.preferences.ui_scale == 1.0, "the dialog holds them in its draft");
+        // A rebinding made in the dialog is part of its draft.
+        app.prefs_window.draft.as_mut().expect("the dialog holds a draft").keys.insert("solid.extrude".into(), vec!["Shift+E".into()]);
         let v = control(&mut app, &json!({"button": "cancel"})).unwrap();
         assert_eq!(v["dialog"], serde_json::Value::Null);
         assert!(app.ui.dark && app.preferences.theme == "dark" && app.preferences.ui_scale == 1.0 && app.preferences.zoom_to_cursor);
         assert!(app.keymap.custom.is_empty(), "a rebinding made while the dialog was open is undone too");
 
         control(&mut app, &json!({"open": "Navigation", "nav": "alias", "look_at_anim": false})).unwrap();
+        assert_eq!(app.preferences.nav, "fusion", "the choice waits in the draft");
         control(&mut app, &json!({"button": "apply"})).unwrap();
+        assert_eq!(app.preferences.nav, "alias", "Apply puts the draft in place");
+        assert!(!app.preferences.look_at_anim);
         control(&mut app, &json!({"nav": "tinkercad"})).unwrap();
+        assert_eq!(app.preferences.nav, "alias", "and the next change waits in the draft again");
         control(&mut app, &json!({"button": "cancel"})).unwrap();
         assert_eq!(app.preferences.nav, "alias", "Cancel goes back to the last Apply");
         let to = {
@@ -6296,6 +6665,9 @@ mod tests {
 
         control(&mut app, &json!({"open": "Navigation"})).unwrap();
         control(&mut app, &json!({"button": "defaults"})).unwrap();
+        assert_eq!(app.preferences.nav, "alias", "Restore Defaults changes nothing until Apply");
+        assert!(!app.preferences.look_at_anim, "nor its look-at choice");
+        control(&mut app, &json!({"button": "apply"})).unwrap();
         assert_eq!(app.preferences.nav, "fusion");
         assert!(app.preferences.look_at_anim);
         control(&mut app, &json!({"button": "ok"})).unwrap();
@@ -6367,6 +6739,52 @@ mod tests {
         assert_eq!(v["apply_enabled"], false);
         let v = control(&mut app, &json!({"open": "General"})).unwrap();
         assert_eq!(v["apply_enabled"], false);
+    }
+
+    /// `live_apply`: every edit takes effect as it is made, as it did before the dialog held a
+    /// draft, and Cancel still puts back what was there when the dialog opened.
+    #[test]
+    fn live_apply_keeps_the_older_behaviour_reachable() {
+        let mut h = crate::scenario::Harness::new();
+        h.app.home.open = false;
+        assert!(!Prefs::default().live_apply, "the dialog holds its edits in a draft by default");
+        h.call("ui.prefs", json!({"live_apply": true}));
+        assert!(h.app.preferences.live_apply, "the preference itself applies at once");
+        h.call("ui.prefs", json!({"open": "Interface"}));
+        h.frames(2);
+        h.call("ui.prefs", json!({"theme": "light"}));
+        assert!(!h.app.ui.dark, "a theme choice applies at once");
+        h.frames(2);
+        assert_eq!(crate::theme::Tokens::get().panel, crate::theme::Tokens::light().panel, "and the window draws with it");
+        h.call("ui.prefs", json!({"button": "cancel"}));
+        assert!(h.app.ui.dark && h.app.preferences.theme == "dark", "Cancel puts it back");
+        assert!(h.app.preferences.live_apply, "and the preference that turns the draft off goes with it");
+
+        h.call("ui.prefs", json!({"open": "Navigation"}));
+        h.step(&json!({"click": {"handle": "prefs:free_orbit"}})).unwrap();
+        assert!(h.app.preferences.free_orbit, "a page's own checkbox applies at once with `live_apply` on");
+        h.call("ui.prefs", json!({"button": "cancel"}));
+        assert!(!h.app.preferences.free_orbit, "Cancel puts that back too");
+    }
+
+    /// A preference the app changes outside the dialog (`live_apply` off) keeps standing: the
+    /// dialog's draft takes the new value up, so the next frame does not put the older one back.
+    #[test]
+    fn a_change_made_outside_the_dialog_stands() {
+        let mut h = crate::scenario::Harness::new();
+        h.app.home.open = false;
+        h.call("ui.prefs", json!({"open": "Interface"}));
+        h.call("ui.prefs", json!({"theme": "light"}));
+        h.frames(2);
+        // The navigation bar's contact-shading toggle, or any other command, while the dialog is open.
+        h.call("engine.execute", json!({"command": "view.ambient_occlusion", "params": {"enabled": true}}));
+        h.frames(2);
+        assert!(h.app.preferences.ambient_occlusion, "a change from outside the dialog stands");
+        assert_eq!(h.app.preferences.theme, "dark", "and the dialog's own change still waits in its draft");
+        h.call("ui.prefs", json!({"button": "cancel"}));
+        h.frames(2);
+        assert!(h.app.preferences.ambient_occlusion, "closing the dialog leaves the outside change in place");
+        assert_eq!(h.app.preferences.theme, "dark", "and drops the draft's theme");
     }
 
     #[test]
@@ -6629,15 +7047,22 @@ mod ui_scale_regression_tests {
         h.frames(3);
         h.app.synthetic.push(Event::PointerMoved(b));
         h.frames(4);
-        assert_ne!(h.app.preferences.ui_scale, 1.0, "the slider changes its value during the drag");
+        // What the slider takes is the dialog's draft; the layout waits anyway.
+        let dragged = h.app.prefs_window.draft.as_ref().expect("the dialog holds a draft").prefs.ui_scale;
+        assert_ne!(dragged, 1.0, "the slider changes its value during the drag");
+        assert_eq!(h.app.preferences.ui_scale, 1.0, "the app's own scale is unchanged until Apply");
         assert_eq!(h.ctx.zoom_factor(), 1.0, "layout must remain stable until release");
         assert_eq!(crate::scenario::rect_of("prefs:window").unwrap(), window);
         h.app.synthetic.push(Event::PointerButton { pos: b, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
         h.frames(5);
+        assert_eq!(h.ctx.zoom_factor(), 1.0, "a draft leaves the layout alone");
+        h.call("ui.prefs", json!({"button":"apply"}));
+        h.frames(3);
+        assert_ne!(h.app.preferences.ui_scale, 1.0, "Apply takes the dragged value");
         assert!((h.ctx.zoom_factor() - h.app.preferences.ui_scale).abs() < 1e-4);
         h.call("ui.prefs", json!({"button":"cancel"}));
-        assert_eq!(h.app.preferences.ui_scale, 1.0, "Cancel restores the original scale");
-        assert_eq!(h.ctx.zoom_factor(), 1.0);
+        assert_ne!(h.app.preferences.ui_scale, 1.0, "Cancel goes back to the last Apply");
+        assert_eq!(h.ctx.zoom_factor(), h.app.preferences.ui_scale);
     }
 }
 
@@ -6647,7 +7072,12 @@ pub(crate) fn view_angles_checkbox(app: &mut SolveApp, ui: &mut egui::Ui) {
     let response = ui_kit::checkbox(ui, crate::i18n::tr("ui.view_angles"), &mut enabled).on_hover_text(crate::i18n::tr("ui.view_angles_help"));
     crate::scenario::publish_handle("view:view_angles", response.rect.center());
     if response.changed() {
-        let _ = app.run("view.angle_readout", json!({"enabled": enabled}));
+        if deferring(app) {
+            // The dialog's draft holds the choice; the command runs when it is applied.
+            app.preferences.show_view_angles = enabled;
+        } else {
+            let _ = app.run("view.angle_readout", json!({"enabled": enabled}));
+        }
     }
 }
 
@@ -6666,18 +7096,22 @@ mod ambient_occlusion_tests {
         super::reveal_preference(&mut h, "view:ambient_occlusion");
         let checkbox = crate::scenario::handle_at("view:ambient_occlusion").unwrap();
         h.call("ui.click", json!({"x":checkbox.x,"y":checkbox.y}));
+        assert!(!h.app.preferences.ambient_occlusion, "the checkbox lands in the dialog's draft");
+        h.call("ui.prefs", json!({"button":"apply"}));
         assert!(h.app.preferences.ambient_occlusion);
         let mut restored = SolveApp::new(solidcraft_engine::Session::default(), Default::default());
         restored.load_prefs(&h.app.prefs());
         assert!(restored.preferences.ambient_occlusion);
         h.call("ui.prefs", json!({"button":"cancel"}));
-        assert!(!h.app.preferences.ambient_occlusion);
+        assert!(h.app.preferences.ambient_occlusion, "Cancel goes back to the last Apply");
         h.call("ui.prefs", json!({"open":"Graphics", "ambient_occlusion":true}));
         h.call("ui.prefs", json!({"button":"apply"}));
         h.call("ui.prefs", json!({"button":"defaults"}));
-        assert!(!h.app.preferences.ambient_occlusion);
+        assert!(h.app.preferences.ambient_occlusion, "Restore Defaults changes nothing until Apply");
+        h.call("ui.prefs", json!({"button":"apply"}));
+        assert!(!h.app.preferences.ambient_occlusion, "Graphics defaults switch the optional shading off");
         h.call("ui.prefs", json!({"button":"cancel"}));
-        assert!(h.app.preferences.ambient_occlusion);
+        assert!(!h.app.preferences.ambient_occlusion);
         h.call("engine.execute", json!({"command":"view.ambient_occlusion","params":{"enabled":false}}));
         assert!(!h.app.preferences.ambient_occlusion);
         h.call("engine.execute", json!({"command":"view.ambient_occlusion","params":{"enabled":"yes"}}));
@@ -6730,13 +7164,17 @@ mod graphics_preset_tests {
             let pos = crate::scenario::handle_at(handle).unwrap();
             h.call("ui.click", json!({"x":pos.x,"y":pos.y}));
         }
+        // The dialog is drawn last, so these clicks are its Graphics page's own preset control:
+        // the choice waits in the draft.
+        assert!(!h.app.preferences.ambient_occlusion, "the preset waits in the dialog's draft");
+        h.call("ui.prefs", json!({"button":"apply"}));
         assert!(h.app.preferences.ambient_occlusion);
         let mut restored = SolveApp::new(solidcraft_engine::Session::default(), Default::default());
         restored.load_prefs(&h.app.prefs());
         assert!(restored.preferences.ambient_occlusion);
         h.call("ui.prefs", json!({"button":"cancel"}));
-        assert_eq!(graphics_preset(&h.app.preferences), "performance");
-        assert!(!h.app.preferences.ambient_occlusion);
+        assert_eq!(graphics_preset(&h.app.preferences), "quality", "Cancel goes back to the last Apply");
+        assert!(h.app.preferences.ambient_occlusion);
         h.call("engine.execute", json!({"command":"view.graphics_preset","params":{"preset":"quality"}}));
         assert!(h.app.preferences.ambient_occlusion);
         h.call("engine.execute", json!({"command":"view.graphics_preset","params":{"preset":"invalid"}}));
@@ -6764,8 +7202,9 @@ mod graphics_preset_tests {
         assert_eq!(graphics_preset(&restored.preferences), "quality");
         h.call("ui.prefs", json!({"open":"Graphics"}));
         h.call("ui.prefs", json!({"button":"defaults"}));
-        assert_eq!(graphics_preset(&h.app.preferences), "performance");
+        assert_eq!(graphics_preset(&h.app.preferences), "custom", "Restore Defaults changes nothing until Apply");
         h.call("ui.prefs", json!({"button":"ok"}));
+        assert_eq!(graphics_preset(&h.app.preferences), "performance");
         assert_eq!(h.app.preferences.msaa, msaa);
         assert_eq!(h.app.cam, camera);
         assert_eq!(h.app.session.doc.to_json(), design);

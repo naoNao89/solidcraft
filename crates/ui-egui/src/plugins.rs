@@ -294,6 +294,8 @@ mod tests {
         assert!(!enabled(&other, "ftc-frc-parts"));
         crate::prefs::control(&mut app, &json!({"open": "Plugins", "button": "defaults"})).unwrap();
         assert_eq!(app.prefs_window.section, crate::prefs::PAGE_PLUGINS);
+        assert!(!enabled(&app, "ftc-frc-parts"), "Defaults resets the page in the dialog's draft");
+        crate::prefs::control(&mut app, &json!({"button": "apply"})).unwrap();
         assert!(enabled(&app, "ftc-frc-parts"));
         assert!(crate::prefs::control(&mut app, &json!({"open": "NoSuch"})).is_err());
     }

@@ -174,13 +174,14 @@ fn the_line_drag_preference_saves_and_follows_the_sketch_page() {
     crate::prefs::reveal_preference(&mut h, "prefs:line_drag_draws_one");
     h.step(&json!({"click":{"handle":"prefs:line_drag_draws_one"}})).unwrap();
     h.frames(2);
-    assert!(h.app.preferences.line_drag_draws_one, "the checkbox turns it on");
+    assert!(!h.app.preferences.line_drag_draws_one, "the click waits in the dialog's draft");
     control(&mut h.app, &json!({"button": "apply"})).unwrap();
+    assert!(h.app.preferences.line_drag_draws_one, "Apply turns it on");
     let mut other = crate::SolveApp::new(solidcraft_engine::Session::default(), Default::default());
     other.load_prefs(&h.app.prefs());
     assert!(other.preferences.line_drag_draws_one, "saved");
     control(&mut h.app, &json!({"button": "defaults"})).unwrap();
-    assert!(!h.app.preferences.line_drag_draws_one);
+    assert!(h.app.preferences.line_drag_draws_one, "Restore Defaults resets the page in the draft");
     control(&mut h.app, &json!({"button": "cancel"})).unwrap();
-    assert!(h.app.preferences.line_drag_draws_one);
+    assert!(h.app.preferences.line_drag_draws_one, "Cancel keeps the last Apply");
 }

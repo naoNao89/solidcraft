@@ -1147,7 +1147,7 @@ fn cancel_puts_the_mode_back_ok_keeps_it_and_restore_defaults_resets_interface_o
     let control = |app: &mut crate::SolveApp, p: serde_json::Value| crate::prefs::control(app, &p).unwrap();
     control(&mut app, json!({"open": "Interface"}));
     control(&mut app, json!({"color_vision": "protan"}));
-    assert_eq!(app.preferences.color_vision, ColorVision::Protan);
+    assert_eq!(app.preferences.color_vision, ColorVision::Off, "the choice waits in the dialog's draft");
     control(&mut app, json!({"button": "cancel"}));
     assert_eq!(app.preferences.color_vision, ColorVision::Off);
     control(&mut app, json!({"open": "Interface"}));
@@ -1159,8 +1159,9 @@ fn cancel_puts_the_mode_back_ok_keeps_it_and_restore_defaults_resets_interface_o
     assert_eq!(app.preferences.color_vision, ColorVision::Tritan);
     control(&mut app, json!({"open": "Interface"}));
     control(&mut app, json!({"button": "defaults"}));
-    assert_eq!(app.preferences.color_vision, ColorVision::Off);
+    assert_eq!(app.preferences.color_vision, ColorVision::Tritan, "Defaults resets the page in the draft");
     control(&mut app, json!({"button": "ok"}));
+    assert_eq!(app.preferences.color_vision, ColorVision::Off);
 }
 
 /// #975: the Curvature Map reads from flat to tight with hue lost too. Along the shader's two

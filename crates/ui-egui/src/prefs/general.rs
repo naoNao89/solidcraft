@@ -23,7 +23,9 @@ pub(super) fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
     ui_kit::settings_section(ui, "saving", app.tr("prefs.saving"), |ui| {
         ui_kit::settings_block_hint(ui, app.tr("ui.autosave_every"), crate::i18n::tr_label("0 turns it off"), labels, |ui| {
             ui.horizontal(|ui| {
-                if ui_kit::settings_number(ui, &mut app.autosave_minutes, 0.0..=120.0, 0.5).changed() {
+                // Deferred (the dialog is open and `live_apply` is off): the draft holds the
+                // interval, and Apply arms the timer.
+                if ui_kit::settings_number(ui, &mut app.autosave_minutes, 0.0..=120.0, 0.5).changed() && !crate::prefs::deferring(app) {
                     set_autosave(app);
                 }
                 ui_kit::settings_inline_note(ui, app.tr("prefs.minutes"));

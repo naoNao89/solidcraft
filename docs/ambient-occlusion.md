@@ -2,8 +2,10 @@
 
 Enable **Ambient occlusion** in the viewport's **View settings** menu or in
 **Preferences → Graphics**. It adds soft contact shading at corners, recesses and
-nearby opaque surfaces. It is off by default, applies immediately, and is saved
-between runs. The shared **Graphics Preset** selector in both settings surfaces
+nearby opaque surfaces. It is off by default and is saved between runs. The
+viewport's **View settings** menu applies it at once; the checkbox in the
+Preferences dialog is held with the other changes until you press **Apply** or
+**OK**, and **Cancel** discards it. The shared **Graphics Preset** selector in both settings surfaces
 combines AO with the display-quality and supersampling controls from #1319 and #1321:
 
 | Preset | Ambient occlusion | Display quality | Supersampling |

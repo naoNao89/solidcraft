@@ -892,6 +892,8 @@ mod tests {
         assert!(h.widget("Shift+C…").is_some(), "retain the proposed chord until confirmed");
         assert_eq!(effective(&h.app, "solid.chamfer"), None);
         h.frames(65);
+        // The recorded chord is the dialog's draft until Apply commits it.
+        h.call("ui.prefs", json!({"button":"apply"}));
         assert_eq!(effective(&h.app, "solid.chamfer").as_deref(), Some("Shift+C"));
         assert!(h.widget("Shift+C").is_some());
     }
@@ -1078,6 +1080,8 @@ mod tests {
             h.call("ui.key", json!({"key":key}));
             assert!(h.app.keymap.capturing.is_some(), "{key} should still be pending");
             h.frames(65);
+            // The recorded chord is the dialog's draft until Apply commits it.
+            h.call("ui.prefs", json!({"button":"apply"}));
             assert_eq!(effective(&h.app, "sketch.mirror").as_deref(), Some(key));
             assert!(h.app.prefs_window.open);
         }
@@ -1201,6 +1205,8 @@ mod tests {
         h.call("ui.key", json!({"key":"J","pressed":true,"shift":true}));
         h.call("ui.key", json!({"key":"J","pressed":false}));
         h.frames(65);
+        // The recorded key is the dialog's draft until Apply commits it.
+        h.call("ui.prefs", json!({"button":"apply"}));
         assert_eq!(keys(&h.app, "solid.extrude"), ["E", "Shift+J"]);
         assert!(h.widget("E").is_some() && h.widget("Shift+J").is_some(), "both keys are listed");
         let got = h.call("ui.shortcut", json!({"command":"solid.extrude"}));
@@ -1390,6 +1396,8 @@ mod card_tests {
                 h.step(&json!({"key":"ShiftLeft","pressed":false})).unwrap();
                 h.frames(65);
             }
+            // The card's edits are the dialog's draft until Apply commits them.
+            h.call("ui.prefs", json!({"button":"apply"}));
             assert_eq!(effective(&h.app, "solid.extrude").unwrap_or_default(), expected);
         }
         h.step(&json!({"click":{"handle":"keymap:capture:solid.extrude"}})).unwrap();
@@ -1473,6 +1481,8 @@ mod card_tests {
             let message = h.app.keymap.message.clone();
             if inside {
                 assert_eq!(message, None);
+                // The import edits the dialog's draft until Apply commits it.
+                h.call("ui.prefs", json!({"button":"apply"}));
                 assert_eq!(effective(&h.app, "solid.extrude").as_deref(), Some("Shift+E"));
             } else {
                 assert!(message.as_deref().is_some_and(|m| m.contains("outside the folders this agent may use")), "{message:?}");

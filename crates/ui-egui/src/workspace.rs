@@ -1020,11 +1020,15 @@ mod tests {
         h.call("ui.prefs", json!({"open":"Interface"}));
         crate::prefs::reveal_preference(&mut h, "prefs:toolbar_tab:MODEL");
         h.step(&json!({"click":{"handle":"prefs:toolbar_tab:MODEL"}})).unwrap();
+        assert_eq!(h.app.preferences.hidden_toolbar_tabs, ["MODEL"], "the click waits in the dialog's draft");
+        h.call("ui.prefs", json!({"button":"apply"}));
         assert!(h.app.preferences.hidden_toolbar_tabs.is_empty());
         crate::prefs::reveal_preference(&mut h, "prefs:toolbar_tab:VIEW");
         h.step(&json!({"click":{"handle":"prefs:toolbar_tab:VIEW"}})).unwrap();
+        h.call("ui.prefs", json!({"button":"apply"}));
         assert_eq!(h.app.preferences.hidden_toolbar_tabs, ["VIEW"]);
         h.call("ui.prefs", json!({"button":"defaults"}));
+        h.call("ui.prefs", json!({"button":"apply"}));
         assert!(h.app.preferences.hidden_toolbar_tabs.is_empty(), "the Interface page's defaults show every standard tab");
         h.call("ui.prefs", json!({"button":"ok"}));
 

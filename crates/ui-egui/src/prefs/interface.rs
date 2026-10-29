@@ -85,7 +85,18 @@ pub(super) fn interface(app: &mut SolveApp, ui: &mut egui::Ui, t: &Tokens) {
                             &[crate::i18n::tr("ui.layout_floating"), crate::i18n::tr("ui.layout_compact")],
                             Default::default(),
                         ) {
-                            let _ = app.run("view.layout", json!({"mode": if selected == 1 { "compact" } else { "floating" }}));
+                            // `view.layout` reads "compact" as the docked workspace (`lib.rs`).
+                            let mode = if selected == 1 { "compact" } else { "floating" };
+                            // Deferred (the dialog is open and `live_apply` is off): the draft
+                            // holds the layout, and Apply moves the workspace. The command would
+                            // move it now.
+                            if crate::prefs::deferring(app) {
+                                let layout = if mode == "compact" { crate::shell::LayoutMode::Docked } else { crate::shell::LayoutMode::Floating };
+                                app.preferences.layout = layout;
+                                app.ui.layout = layout;
+                            } else {
+                                let _ = app.run("view.layout", json!({"mode": mode}));
+                            }
                         }
                     });
                     ui_kit::row(ui, app.tr("prefs.toolbar"), |ui| {
@@ -157,7 +168,20 @@ pub(super) fn interface(app: &mut SolveApp, ui: &mut egui::Ui, t: &Tokens) {
                                 3 => "browser",
                                 _ => "bottom",
                             };
-                            let _ = app.run("view.history_layout", json!({ "dock": dock }));
+                            // Deferred (the dialog is open and `live_apply` is off): the draft
+                            // holds the dock, and Apply moves the history. The command would move
+                            // it now.
+                            if crate::prefs::deferring(app) {
+                                // The same fields `view.history_layout` writes (`lib.rs`).
+                                let prefs = &mut app.preferences;
+                                prefs.timeline_left = !matches!(dock, "bottom" | "browser");
+                                prefs.history_in_browser = dock == "browser";
+                                prefs.timeline_under_browser = dock == "under_browser";
+                                prefs.timeline_collapsed = false;
+                                prefs.timeline_left_browser_collapsed = false;
+                            } else {
+                                let _ = app.run("view.history_layout", json!({ "dock": dock }));
+                            }
                         }
                     });
                     for (short, legacy) in [
@@ -253,6 +277,11 @@ pub(super) fn interface(app: &mut SolveApp, ui: &mut egui::Ui, t: &Tokens) {
                         let check = setting::status_bar(app, ui).on_hover_text(app.tr("prefs.status_bar_note"));
                         crate::scenario::publish_target("prefs:status_bar", check.rect);
                     });
+                    // Whether an edit applies as it is made or waits for OK or Apply (#7343, #8561).
+                    ui_kit::row(ui, "", |ui| {
+                        let check = setting::live_apply(app, ui);
+                        crate::scenario::publish_target("prefs:live_apply", check.rect);
+                    });
                     ui_kit::text(ui, app.tr("prefs.layout_note"), ui_kit::Text::Hint("layout"));
                     ui_kit::text(ui, app.tr("prefs.history_sketches_note"), ui_kit::Text::Hint("history_sketches"));
                     ui_kit::LayoutPreview {
@@ -325,7 +354,10 @@ pub(super) fn interface(app: &mut SolveApp, ui: &mut egui::Ui, t: &Tokens) {
                     app.pick_open_for(&["ttf", "otf", "ttc"], |app, path| {
                         if let Some(path) = path {
                             if crate::fonts::ui_font(&path).is_some() {
-                                app.preferences.ui_font = path;
+                                // The pick itself is not a setting; the font it names is one. Through
+                                // `editing` the dialog's draft keeps it: Apply keeps it, Cancel
+                                // discards it (and with `live_apply` it is the live value at once).
+                                crate::prefs::editing(app, |app| app.preferences.ui_font = path);
                             } else {
                                 app.set_status(crate::i18n::tr("prefs.font_unreadable"), true);
                             }

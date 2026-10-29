@@ -1,5 +1,5 @@
 [
-  {"note": "Colour vision lives on Interface: choices apply immediately; Cancel restores them, OK keeps them, and Interface defaults reset them. Page scrolling preserves the fixed window width."},
+  {"note": "Colour vision lives on Interface: a choice is held until Apply or OK; Cancel puts it back, OK keeps it, and Interface defaults reset them. Page scrolling preserves the fixed window width."},
   {"click": {"handle": "titlebar:preferences"}},
   {"expect": {"prefs": {"dialog": "General", "color_vision": "off"}, "same_width": "prefs:window"}},
   {"widget": "Interface"},
@@ -7,7 +7,7 @@
   {"call": "ui.inspect", "params": {}},
   {"expect": {"shown": "Colour vision", "prefs": {"dialog": "Interface"}, "same_width": "prefs:window"}},
   {"widget": "Deutan"},
-  {"expect": {"prefs": {"color_vision": "deutan"}, "same_width": "prefs:window"}},
+  {"expect": {"prefs": {"color_vision": "off"}, "same_width": "prefs:window"}},
   {"widget": "Cancel"},
   {"expect": {"prefs": {"dialog": null, "color_vision": "off"}}},
   {"key": "Comma", "cmd": true},
@@ -15,6 +15,7 @@
   {"call": "ui.scroll", "params": {"x": 1000, "y": 500, "delta": -5000}},
   {"call": "ui.inspect", "params": {}},
   {"widget": "Tritan"},
+  {"expect": {"prefs": {"color_vision": "off"}}},
   {"widget": "OK"},
   {"expect": {"prefs": {"dialog": null, "color_vision": "tritan"}}},
   {"key": "Comma", "cmd": true},
@@ -23,7 +24,6 @@
   {"call": "ui.inspect", "params": {}},
   {"expect": {"shown": "Tritan", "same_width": "prefs:window"}},
   {"widget": "Restore Defaults"},
-  {"expect": {"prefs": {"color_vision": "off"}}},
   {"widget": "OK"},
   {"expect": {"prefs": {"dialog": null, "color_vision": "off"}}}
 ]

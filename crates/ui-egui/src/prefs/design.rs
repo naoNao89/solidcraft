@@ -13,7 +13,11 @@ pub(super) fn show(app: &mut SolveApp, ui: &mut egui::Ui) {
                     && app.preferences.default_units != *unit
                 {
                     app.preferences.default_units = (*unit).into();
-                    default_units_changed(app);
+                    // Deferred (the dialog is open and `live_apply` is off): the draft holds the
+                    // unit, and Apply runs this on the blank design.
+                    if !crate::prefs::deferring(app) {
+                        default_units_changed(app);
+                    }
                 }
             });
             ui_kit::row(ui, app.tr("ui.length_decimals"), |ui| {

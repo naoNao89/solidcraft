@@ -1,11 +1,11 @@
 [
-  {"note": "#36: one Preferences dialog, from the gear at the top right (and Ctrl+,). Changes apply at once; Cancel puts them back, OK keeps them."},
+  {"note": "#36: one Preferences dialog, from the gear at the top right (and Ctrl+,). Changes are held until Apply or OK; Cancel puts them back."},
   {"click": {"handle": "titlebar:preferences"}},
   {"expect": {"shown": "Restore Defaults", "prefs": {"dialog": "General", "theme": "dark", "dark": true}}},
   {"widget": "Interface"},
   {"click": {"handle": "prefs:theme"}},
   {"click": {"handle": "prefs:theme:light"}},
-  {"expect": {"prefs": {"theme": "light", "dark": false}}},
+  {"expect": {"prefs": {"theme": "dark", "dark": true}}},
   {"widget": "Cancel"},
   {"expect": {"not_shown": "Restore Defaults", "prefs": {"dialog": null, "theme": "dark", "dark": true}}},
   {"note": "Ctrl+, opens it again; the shortcuts page is in the same dialog."},
@@ -16,10 +16,12 @@
   {"widget": "Navigation"},
   {"widget": "Fusion"},
   {"widget": "Tinkercad"},
+  {"expect": {"prefs": {"nav": "fusion"}}},
+  {"widget": "Apply"},
   {"expect": {"prefs": {"nav": "tinkercad"}}},
   {"widget": "Design"},
   {"widget": "Y up"},
-  {"expect": {"prefs": {"up_axis": "y", "dialog": "Design"}}},
+  {"expect": {"prefs": {"up_axis": "z", "dialog": "Design"}}},
   {"widget": "OK"},
   {"expect": {"not_shown": "Restore Defaults", "prefs": {"up_axis": "y", "dialog": null}}}
 ]

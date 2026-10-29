@@ -93,13 +93,15 @@ mod tests {
         h.frames(4);
         crate::prefs::reveal_preference(&mut h, "view:tool_cursor");
         h.step(&json!({"click":{"handle":"view:tool_cursor"}})).unwrap();
+        // The checkbox edits the dialog's draft: the badge stays off until Apply.
+        assert!(!h.app.ui.tool_cursor);
+        h.call("ui.prefs", json!({"button":"apply"}));
         assert!(h.app.ui.tool_cursor);
         h.call("ui.prefs", json!({"button":"cancel"}));
-        assert!(!h.app.ui.tool_cursor);
         h.app.ui.tool_cursor = true;
         h.call("ui.prefs", json!({"open":"Navigation"}));
         h.call("ui.prefs", json!({"button":"defaults"}));
-        assert!(!h.app.ui.tool_cursor);
+        assert!(h.app.ui.tool_cursor, "Defaults resets the draft; the app keeps the value until Apply");
         h.call("ui.prefs", json!({"button":"cancel"}));
         assert!(h.app.ui.tool_cursor, "Cancel also restores the value from before Defaults");
     }

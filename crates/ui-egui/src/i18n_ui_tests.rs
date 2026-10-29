@@ -59,6 +59,9 @@ fn sketch_palette_profile_and_points_rows_show_their_own_translation() {
     }
 }
 
+/// The language row edits the dialog's draft: the dialog is drawn from it, so its own labels turn
+/// Japanese at once, while the app keeps the locale it committed until Apply, and Cancel discards
+/// the draft.
 #[test]
 fn language_preference_cancel_restores_previous_locale() {
     let mut h = Harness::new();
@@ -66,10 +69,16 @@ fn language_preference_cancel_restores_previous_locale() {
     h.call("ui.prefs", json!({"open":"General"}));
     h.call("ui.prefs", json!({"language":"ja"}));
     assert!(h.widget("言語").is_some());
-    assert_eq!(h.app.preferences.language, "ja");
-    h.call("ui.prefs", json!({"button":"cancel"}));
-    assert_eq!(h.app.preferences.language, "en");
+    assert_eq!(h.app.preferences.language, "en", "the draft language is not committed yet");
     assert_eq!(h.app.tr("ui.preferences"), "Preferences");
+    h.call("ui.prefs", json!({"button":"apply"}));
+    assert_eq!(h.app.preferences.language, "ja");
+    assert_eq!(h.app.tr("ui.preferences"), "環境設定");
+    h.call("ui.prefs", json!({"language":"en"}));
+    assert_eq!(h.app.preferences.language, "ja", "a change after Apply waits in the draft");
+    h.call("ui.prefs", json!({"button":"cancel"}));
+    assert_eq!(h.app.preferences.language, "ja", "Cancel restores the last Apply");
+    assert_eq!(h.app.tr("ui.preferences"), "環境設定");
 }
 
 /// The chrome a user sees before touching anything: the browser heading and the SELECT panel.

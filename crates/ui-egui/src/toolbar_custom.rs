@@ -388,26 +388,31 @@ pub fn import(app: &mut SolveApp, v: &Value) -> Result<(), String> {
     if !matches!(v.get("format").and_then(Value::as_str), Some("solidcraft-shortcuts/1" | "solvecraft-shortcuts/1")) {
         return Err("not a SolidCraft shortcuts file".into());
     }
-    let navigation_bar = v
-        .get("navigation_bar")
-        .map(|value| {
-            crate::navigation_bar::validate(value)?;
-            serde_json::from_value::<crate::navigation_bar::NavigationBar>(value.clone()).map_err(|e| e.to_string())
-        })
-        .transpose()?;
-    if let Some(bar) = navigation_bar {
-        app.preferences.navigation_bar = bar;
-    }
-    if let Some(s) = v.get("shortcuts") {
-        app.keymap.load(s);
-    }
-    if let Some(f) = v.get("favourites").and_then(Value::as_array) {
-        app.sbox.pinned = f.iter().take(64).filter_map(|x| x.as_str().map(str::to_string)).collect();
-    }
-    if let Some(t) = v.get("toolbar") {
-        app.toolbar_custom.load(t);
-    }
-    Ok(())
+    // A picked file's shortcuts, favourites, toolbar and navigation bar are preferences: through
+    // `prefs::editing` the Preferences dialog's draft keeps them while it holds one, so Apply keeps
+    // them and Cancel discards them (with no dialog open they are the live settings at once).
+    crate::prefs::editing(app, |app| {
+        let navigation_bar = v
+            .get("navigation_bar")
+            .map(|value| {
+                crate::navigation_bar::validate(value)?;
+                serde_json::from_value::<crate::navigation_bar::NavigationBar>(value.clone()).map_err(|e| e.to_string())
+            })
+            .transpose()?;
+        if let Some(bar) = navigation_bar {
+            app.preferences.navigation_bar = bar;
+        }
+        if let Some(s) = v.get("shortcuts") {
+            app.keymap.load(s);
+        }
+        if let Some(f) = v.get("favourites").and_then(Value::as_array) {
+            app.sbox.pinned = f.iter().take(64).filter_map(|x| x.as_str().map(str::to_string)).collect();
+        }
+        if let Some(t) = v.get("toolbar") {
+            app.toolbar_custom.load(t);
+        }
+        Ok(())
+    })
 }
 
 /// Customize Toolbar: every command of the tab's panels with a check box (on the toolbar or

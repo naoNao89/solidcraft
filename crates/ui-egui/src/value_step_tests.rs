@@ -372,5 +372,9 @@ fn the_preference_is_on_the_design_page() {
     }
     h.step(&json!({"click": {"handle": "prefs:step_values"}})).unwrap();
     h.frames(2);
+    // The checkbox edits the dialog's draft: Apply lands it on the app.
+    assert!(!h.app.preferences.step_values, "the click waits in the draft");
+    h.call("ui.prefs", json!({"button": "apply"}));
+    h.frames(2);
     assert!(h.app.preferences.step_values, "the Design page's checkbox turns it on");
 }
