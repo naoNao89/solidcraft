@@ -46,3 +46,10 @@ changelog entry.
   delivered through the `zwp_pointer_gestures_v1` protocol when the compositor implements it.
   SolidCraft: backport of the gesture part of rust-windowing/winit#4338 (winit 0.31 only
   upstream), so a trackpad pinch reaches the application on Linux.
+
+### Fixed
+
+- On macOS, the text that ends a composition is no longer dropped: `insertText:` committed only
+  while marked text was present, and an input method clears that text before handing over the key
+  that ended the composition, so the space after a Vietnamese syllable never arrived.
+  SolidCraft: backport of rust-windowing/winit#4651 (fixes rust-windowing/winit#3925).

@@ -44,7 +44,7 @@ impl TextInput {
         ime_enabled: bool,
         is_control: bool,
     ) -> InsertText {
-        let commit = self.pending_commit && has_marked_text && ime_enabled && !is_control;
+        let commit = self.pending_commit && ime_enabled && !is_control;
         if commit {
             self.pending_commit = false;
         }
