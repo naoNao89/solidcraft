@@ -1,0 +1,54 @@
+# Fork-only: the repository's gate, `cargo xtask ci`, on GitHub-hosted runners. The repository's
+# own ci.yml asks for Blacksmith runners, which only the upstream repository has, so a run inside a
+# fork sits queued forever. This file exists only on a branch of a contributor's fork, to check a
+# change before it is offered upstream; it must never be merged into the repository.
+name: Fork gate
+
+on:
+  push:
+    branches: [ci/fork-github-runners]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-gate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: cargo xtask ci
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    env:
+      # Pictures (snapshots, screenshots, ui.render, the viewport's offscreen tests) are drawn on
+      # the GPU. The runner has none: Mesa's lavapipe (software Vulkan) draws them, and a test that
+      # would skip for want of an adapter fails instead. The repository's tests job sets these too.
+      SOLIDCRAFT_GPU: software
+      SOLIDCRAFT_REQUIRE_GPU: "1"
+      CARGO_INCREMENTAL: "0"
+      CARGO_TERM_COLOR: always
+      # The repository's tests job runs on a 32-vCPU, memory-heavy runner, where every test binary
+      # runs at once. GitHub's ubuntu-latest has 4 vCPUs: without a bound the 82 binaries, several
+      # of them heavy geometry work, exhaust the runner and the step dies with exit code 143 (the
+      # first run of this workflow did exactly that). This is the repository's own bound for a
+      # shared machine (skills/solidcraft-tests).
+      SOLIDCRAFT_TEST_JOBS: "4"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install the libraries the build and the tests need
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            mesa-vulkan-drivers libvulkan1 \
+            libxkbcommon-dev libwayland-dev libx11-dev libxrandr-dev libxi-dev \
+            libgl1-mesa-dev libasound2-dev libudev-dev
+      - name: Size parallel compiles to the job's memory
+        run: scripts/ci/build-jobs.sh
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - name: The repository's gate
+        run: cargo xtask ci
