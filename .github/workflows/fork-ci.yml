@@ -30,13 +30,20 @@ jobs:
       CARGO_INCREMENTAL: "0"
       CARGO_TERM_COLOR: always
       # The repository's tests job runs on a 32-vCPU, memory-heavy runner, where every test binary
-      # runs at once. GitHub's ubuntu-latest has 4 vCPUs: without a bound the 82 binaries, several
-      # of them heavy geometry work, exhaust the runner and the step dies with exit code 143 (the
-      # first run of this workflow did exactly that). This is the repository's own bound for a
-      # shared machine (skills/solidcraft-tests).
-      SOLIDCRAFT_TEST_JOBS: "4"
+      # runs at once. GitHub's ubuntu-latest has 4 vCPUs and 16 GB. Run 1 (unbounded) died with
+      # exit code 143 four minutes into the tests, with 80 of the 82 binaries in flight; run 2,
+      # bounded to four, died with 143 after 41 minutes, when only the two heaviest binaries (the
+      # kernel lib and the ui-egui lib) were left. One binary at a time is the bound that keeps a
+      # 16 GB runner alive; the repository's own knob for a shared machine
+      # (skills/solidcraft-tests). The step that reports what the run left behind says whether it
+      # was memory or disk next time.
+      SOLIDCRAFT_TEST_JOBS: "1"
     steps:
       - uses: actions/checkout@v4
+      - name: What the runner starts with
+        run: |
+          df -h / /tmp
+          free -m
       - name: Install the libraries the build and the tests need
         run: |
           sudo apt-get update
@@ -52,3 +59,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: The repository's gate
         run: cargo xtask ci
+      - name: What the run left behind
+        if: always()
+        run: |
+          df -h / /tmp
+          free -m
+          du -sh target 2>/dev/null || true
