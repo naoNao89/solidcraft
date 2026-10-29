@@ -44,6 +44,14 @@ jobs:
         run: |
           df -h / /tmp
           free -m
+      - name: Give the runner some swap
+        run: |
+          sudo fallocate -l 16G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          swapon --show
+          free -m
       - name: Install the libraries the build and the tests need
         run: |
           sudo apt-get update
